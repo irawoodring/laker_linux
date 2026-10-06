@@ -1,0 +1,7 @@
+#!/bin/sh
+# Runs at shutdown/reboot.
+for s in $(ls -r /etc/init.d/S* 2>/dev/null); do
+    [ -x "$s" ] && "$s" stop
+done
+sync
+umount -a -r 2>/dev/null

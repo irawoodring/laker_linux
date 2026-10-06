@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+#
+# LakerLinux front door.
+#
+#   ./laker build [stage...]   build kernel + userland + disk image (inside Docker)
+#   ./laker run [--direct]     boot out/lakerlinux.img in QEMU
+#   ./laker shell              a shell inside the build container
+#   ./laker clean              delete build output (keeps downloads)
+#
+# Set LAKER_NATIVE=1 to skip Docker and use your own Linux toolchain
+# (see README.md for the package list).
+
+set -euo pipefail
+cd "$(dirname "${BASH_SOURCE[0]}")"
+
+IMAGE=lakerlinux-builder
+VOLUME=lakerlinux-build   # kernel tree lives in a Docker volume: faster, and
+                          # macOS's case-insensitive filesystem can't hold it
+
+in_env() {
+    if [ "${LAKER_NATIVE:-0}" = 1 ]; then
+        "$@"
+        return
+    fi
+    command -v docker >/dev/null || { echo "Docker not found. Install Docker, or set LAKER_NATIVE=1." >&2; exit 1; }
+    docker build -q -t "$IMAGE" . >/dev/null
+    local tty=(-i); [ -t 0 ] && tty=(-it)
+    local kvm=(); [ -e /dev/kvm ] && kvm=(--device /dev/kvm)
+    docker run --rm "${tty[@]}" "${kvm[@]}" \
+        -v "$PWD:/lakerlinux" -v "$VOLUME:/build" \
+        -e BUILD_DIR=/build -e JOBS="${JOBS:-}" \
+        -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" \
+        "$IMAGE" "$@"
+}
+
+cmd="${1:-help}"; shift || true
+case "$cmd" in
+    build) in_env scripts/build.sh "$@" ;;
+    run)   in_env scripts/run.sh "$@" ;;
+    shell) in_env bash ;;
+    clean)
+        rm -rf out
+        in_env bash -c 'b="${BUILD_DIR:-build}"; rm -rf "$b/src" "$b/rootfs" "$b"/*.img "$b/kernel.fragment"' ;;
+    *) sed -n '3,12p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
+esac
