@@ -24,9 +24,12 @@ in_env() {
     fi
     command -v docker >/dev/null || { echo "Docker not found. Install Docker, or set LAKER_NATIVE=1." >&2; exit 1; }
     docker build -q -t "$IMAGE" . >/dev/null
-    local tty=(-i); [ -t 0 ] && tty=(-it)
-    local kvm=(); [ -e /dev/kvm ] && kvm=(--device /dev/kvm)
-    docker run --rm "${tty[@]}" "${kvm[@]}" \
+    # One array that's never empty: macOS ships bash 3.2, which treats an
+    # empty "${array[@]}" as an unbound variable under `set -u`.
+    local opts=(--rm -i)
+    [ -t 0 ] && opts+=(-t)
+    [ -e /dev/kvm ] && opts+=(--device /dev/kvm)   # Linux hosts only
+    docker run "${opts[@]}" \
         -v "$PWD:/lakerlinux" -v "$VOLUME:/build" \
         -e BUILD_DIR=/build -e JOBS="${JOBS:-}" \
         -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" \
