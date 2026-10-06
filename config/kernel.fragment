@@ -1,0 +1,41 @@
+# LakerLinux kernel options, merged on top of the architecture defconfig.
+# Add an option here, then run `./laker build kernel` to rebuild.
+
+CONFIG_LOCALVERSION="-laker"
+CONFIG_DEFAULT_HOSTNAME="lakerlinux"
+
+# Expose the running config at /proc/config.gz -- handy for exploring.
+CONFIG_IKCONFIG=y
+CONFIG_IKCONFIG_PROC=y
+
+# Let the kernel populate /dev itself so we don't need udev.
+CONFIG_DEVTMPFS=y
+CONFIG_DEVTMPFS_MOUNT=y
+
+# Boot straight from UEFI firmware: the kernel *is* the bootloader.
+CONFIG_EFI=y
+CONFIG_EFI_STUB=y
+CONFIG_EFI_PARTITION=y
+CONFIG_CMDLINE_BOOL=y
+# CMDLINE is filled in by scripts/build.sh from config/versions.sh.
+
+# Filesystems
+CONFIG_EXT4_FS=y
+CONFIG_VFAT_FS=y
+CONFIG_TMPFS=y
+
+# Disks and network for QEMU (virtio) and common real hardware.
+CONFIG_VIRTIO=y
+CONFIG_VIRTIO_PCI=y
+CONFIG_VIRTIO_BLK=y
+CONFIG_VIRTIO_NET=y
+CONFIG_SCSI_VIRTIO=y
+CONFIG_BLK_DEV_NVME=y
+CONFIG_SATA_AHCI=y
+CONFIG_E1000=y
+CONFIG_E1000E=y
+
+# Console on a framebuffer when booted on a real machine.
+CONFIG_DRM=y
+CONFIG_DRM_SIMPLEDRM=y
+CONFIG_FRAMEBUFFER_CONSOLE=y

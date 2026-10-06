@@ -1,0 +1,21 @@
+#!/bin/sh
+# Runs once at boot, before any login prompt appears.
+
+mount -a                      # everything in /etc/fstab
+mkdir -p /dev/pts /dev/shm
+mount -t devpts devpts /dev/pts
+mount -o remount,rw /         # the kernel mounts root read-only at first
+
+hostname -F /etc/hostname
+
+# Networking: loopback, then DHCP on the first NIC (QEMU provides one).
+ip link set lo up
+if ip link show eth0 >/dev/null 2>&1; then
+    ip link set eth0 up
+    udhcpc -b -q -i eth0 -s /usr/share/udhcpc/default.script >/dev/null 2>&1
+fi
+
+# Run any extra startup scripts students drop in (S10foo, S20bar, ...).
+for s in /etc/init.d/S*; do
+    [ -x "$s" ] && "$s" start
+done
