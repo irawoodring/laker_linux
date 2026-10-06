@@ -29,9 +29,14 @@ in_env() {
     local opts=(--rm -i)
     [ -t 0 ] && opts+=(-t)
     [ -e /dev/kvm ] && opts+=(--device /dev/kvm)   # Linux hosts only
+    # Pass through the settings people override on the command line,
+    # e.g. `MEM=2G ./laker run` (see config/versions.sh and scripts/run.sh).
+    local v
+    for v in JOBS MEM KERNEL_VERSION KERNEL_URL BUSYBOX_VERSION BUSYBOX_URL IMAGE_SIZE_MB; do
+        if [ -n "${!v:-}" ]; then opts+=(-e "$v=${!v}"); fi
+    done
     docker run "${opts[@]}" \
-        -v "$PWD:/lakerlinux" -v "$VOLUME:/build" \
-        -e BUILD_DIR=/build -e JOBS="${JOBS:-}" \
+        -v "$PWD:/lakerlinux" -v "$VOLUME:/build" -e BUILD_DIR=/build \
         -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" \
         "$IMAGE" "$@"
 }
