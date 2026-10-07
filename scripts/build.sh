@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 #
-# Build LakerLinux: a Linux kernel + a BusyBox userland, packed into a
-# bootable UEFI disk image.
+# Build LakerLinux: a Linux kernel, the GNU C library and a BusyBox userland,
+# packed into a bootable UEFI disk image.
 #
 #   scripts/build.sh            # build everything
-#   scripts/build.sh kernel     # just one stage: fetch|kernel|busybox|rootfs|image
+#   scripts/build.sh kernel     # just one stage: fetch|kernel|glibc|busybox|rootfs|image
 #
 # Every stage is a plain shell function below -- read them, they're short.
 # Shared settings, and the code that applies patches/, are in common.sh.
@@ -47,8 +47,10 @@ fetch_one() {
 
 stage_fetch() {
     fetch_one "$KERNEL_URL" "$KERNEL_SRC"
+    fetch_one "$GLIBC_URL" "$GLIBC_SRC"
     fetch_one "$BUSYBOX_URL" "$BUSYBOX_SRC"
     sync_patches kernel
+    sync_patches glibc
     sync_patches busybox
 }
 
@@ -70,13 +72,59 @@ stage_kernel() {
     cp "$KERNEL_SRC/arch/x86/boot/bzImage" "$OUT_DIR/bzImage"
 }
 
+stage_glibc() {
+    fetch_one "$KERNEL_URL" "$KERNEL_SRC"
+    fetch_one "$GLIBC_URL" "$GLIBC_SRC"
+    sync_patches glibc
+
+    # glibc talks to the kernel through system calls, so it's compiled against
+    # our kernel's headers: system call numbers, structures, constants.
+    # They're staged first, then only headers whose contents changed are copied
+    # in, so unchanged ones keep their timestamps and don't trigger a rebuild.
+    log "Installing Linux $KERNEL_VERSION headers into the sysroot"
+    "${KMAKE[@]}" headers_install INSTALL_HDR_PATH="$BUILD_DIR/kernel-headers" >/dev/null
+    mkdir -p "$SYSROOT/usr/include"
+    rsync -r --checksum "$BUILD_DIR/kernel-headers/include/" "$SYSROOT/usr/include/"
+
+    # glibc must be built outside its source tree.
+    local build="$BUILD_DIR/glibc-build-$GLIBC_VERSION"
+    if [ ! -f "$build/config.make" ]; then
+        log "Configuring glibc $GLIBC_VERSION"
+        mkdir -p "$build"
+        # Everything goes in /usr/lib (glibc's default splits /lib64 and
+        # /usr/lib64). --enable-kernel is the oldest kernel to support.
+        (cd "$build" && "$GLIBC_SRC/configure" \
+            --prefix=/usr --libdir=/usr/lib libc_cv_slibdir=/usr/lib \
+            --host="$TARGET" \
+            --with-headers="$SYSROOT/usr/include" \
+            --enable-kernel=5.4 \
+            --disable-werror) > "$build/configure.log" 2>&1 ||
+            { tail -20 "$build/configure.log"; die "glibc configure failed; see $build/configure.log"; }
+    fi
+
+    log "Building glibc $GLIBC_VERSION"
+    make -C "$build" -j"$JOBS"
+    # Install into the sysroot, not /: DESTDIR keeps it away from the build
+    # machine's own C library. Skipped when nothing was rebuilt.
+    local stamp="$build/.installed"
+    if [ ! -f "$stamp" ] || [ -n "$(find "$build" -newer "$stamp" -name '*.so*' -print -quit)" ]; then
+        log "Installing glibc into the sysroot"
+        make -C "$build" install DESTDIR="$SYSROOT" > "$build/install.log" 2>&1 ||
+            { tail -20 "$build/install.log"; die "glibc install failed; see $build/install.log"; }
+        touch "$stamp"
+    fi
+}
+
 stage_busybox() {
     fetch_one "$BUSYBOX_URL" "$BUSYBOX_SRC"
     sync_patches busybox
+    [ -f "$SYSROOT/usr/lib/libc.so.6" ] || die "glibc isn't built yet; run ./laker build glibc first"
     log "Configuring BusyBox $BUSYBOX_VERSION"
     "${BBMAKE[@]}" defconfig
-    # Static binary: no shared libraries needed in the image.
-    sed -i 's/^# CONFIG_STATIC is not set/CONFIG_STATIC=y/' "$BUSYBOX_SRC/.config"
+    # Link against our glibc in the sysroot, not the build machine's C library.
+    sed -i -e "s|^CONFIG_SYSROOT=.*|CONFIG_SYSROOT=\"$SYSROOT\"|" \
+           -e "s|^CONFIG_CROSS_COMPILER_PREFIX=.*|CONFIG_CROSS_COMPILER_PREFIX=\"$TARGET-\"|" \
+           "$BUSYBOX_SRC/.config"
     # `tc` doesn't build against modern kernel headers; we don't need it.
     sed -i 's/^CONFIG_TC=y/# CONFIG_TC is not set/' "$BUSYBOX_SRC/.config"
     "${BBMAKE[@]}" oldconfig </dev/null >/dev/null
@@ -94,6 +142,18 @@ stage_rootfs() {
 
     # BusyBox installs itself as /bin/busybox plus a symlink per applet.
     "${BBMAKE[@]}" CONFIG_PREFIX="$ROOTFS" install >/dev/null
+
+    # glibc's run-time pieces: the dynamic loader and the shared libraries.
+    # Headers, static libraries and crt*.o files stay in the sysroot, since
+    # they're only needed for compiling. Stripping debug info takes this from
+    # about 75 MB to 5 MB.
+    mkdir -p "$ROOTFS/usr/lib" "$ROOTFS/lib64"
+    local lib
+    for lib in "$SYSROOT"/usr/lib/*.so.*; do
+        "$TARGET-strip" --strip-debug -o "$ROOTFS/usr/lib/$(basename "$lib")" "$lib"
+    done
+    # Every x86_64 Linux program has this loader path built in.
+    ln -s ../usr/lib/ld-linux-x86-64.so.2 "$ROOTFS/lib64/ld-linux-x86-64.so.2"
 
     # Everything students customize lives in rootfs-overlay/.
     cp -a "$LAKER_DIR/rootfs-overlay/." "$ROOTFS/"
@@ -145,11 +205,11 @@ EOF
 }
 
 stages=("$@")
-[ ${#stages[@]} -eq 0 ] && stages=(fetch kernel busybox rootfs image)
+[ ${#stages[@]} -eq 0 ] && stages=(fetch kernel glibc busybox rootfs image)
 for s in "${stages[@]}"; do
     case "$s" in
-        fetch|kernel|busybox|rootfs|image) mkdir -p "$BUILD_DIR"; "stage_$s" ;;
-        *) die "unknown stage '$s' (expected fetch, kernel, busybox, rootfs, image)" ;;
+        fetch|kernel|glibc|busybox|rootfs|image) mkdir -p "$BUILD_DIR"; "stage_$s" ;;
+        *) die "unknown stage '$s' (expected fetch, kernel, glibc, busybox, rootfs, image)" ;;
     esac
 done
 

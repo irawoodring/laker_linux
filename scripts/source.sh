@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #
-# Work with your changes to the kernel or BusyBox source.
+# Work with your changes to the kernel, glibc or BusyBox source.
 #
-#   scripts/source.sh diff                    # which files you've changed, in both
+#   scripts/source.sh diff                    # which files you've changed, in each
 #   scripts/source.sh diff kernel             # show your unsaved kernel edits
 #   scripts/source.sh diff kernel hello-msg   # save them as patches/kernel/NNNN-hello-msg.patch
 #   scripts/source.sh reset kernel            # throw away unsaved kernel edits
@@ -27,7 +27,7 @@ stage_all() { src_git "$1" add -A; }
 
 summary() {
     local comp src
-    for comp in kernel busybox; do
+    for comp in $COMPONENTS; do
         src="$(src_dir "$comp")"
         if [ ! -d "$src/.git" ]; then
             echo "== $comp: no source yet (./laker build $comp unpacks it)"
@@ -124,7 +124,7 @@ case "${1:-}" in
         else save "$2" "${*:3}"
         fi ;;
     reset)
-        [ $# -eq 2 ] || die "usage: ./laker reset kernel|busybox"
+        [ $# -eq 2 ] || die "usage: ./laker reset kernel|glibc|busybox"
         reset_src "$2" ;;
     *) sed -n '3,11p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
 esac
