@@ -2,24 +2,29 @@
 #
 # LakerLinux front door.
 #
-#   ./laker build [stage...]   build kernel + userland + disk image (inside Docker)
+#   ./laker build [stage...]   build the kernel, Linux From Scratch, and the disk image
 #   ./laker run [--direct]     boot out/lakerlinux.img in QEMU
+#   ./laker lfs download       download (and check) the LFS sources
+#   ./laker lfs status         list the LFS steps, and which are done
+#   ./laker lfs redo <step>    run one LFS step again, e.g. 8-system/35-bash.sh
 #   ./laker shell              a shell inside the build container
-#   ./laker diff [kernel|glibc|busybox [name]]
-#                              show your source edits, or save them as a patch
-#   ./laker reset kernel|glibc|busybox
-#                              throw away source edits you haven't saved
+#   ./laker diff [kernel [name]]
+#                              show your kernel source edits, or save them as a patch
+#   ./laker reset kernel       throw away kernel source edits you haven't saved
 #   ./laker clean              delete build output (keeps downloads)
 #
-# Set LAKER_NATIVE=1 to skip Docker and use your own Linux toolchain
-# (see README.md for the package list).
+# Set LAKER_NATIVE=1 to skip Docker and build on your own x86_64 Linux machine,
+# as root (see README.md).
 
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
-IMAGE=lakerlinux-builder
-VOLUME=lakerlinux-build   # kernel tree lives in a Docker volume: faster, and
-                          # macOS's case-insensitive filesystem can't hold it
+IMAGE=lakerlinux-lfs-builder
+VOLUME=lakerlinux-lfs-build   # the build lives in a Docker volume: faster, and
+                              # macOS's case-insensitive filesystem can't hold it
+# Always an x86_64 container: the LFS build runs the new system's programs in
+# a chroot. On Apple Silicon, Docker Desktop emulates x86_64 for this.
+PLATFORM=linux/amd64
 
 in_env() {
     if [ "${LAKER_NATIVE:-0}" = 1 ]; then
@@ -27,16 +32,17 @@ in_env() {
         return
     fi
     command -v docker >/dev/null || { echo "Docker not found. Install Docker, or set LAKER_NATIVE=1." >&2; exit 1; }
-    docker build -q -t "$IMAGE" . >/dev/null
+    docker build -q --platform "$PLATFORM" -t "$IMAGE" . >/dev/null
     # One array that's never empty: macOS ships bash 3.2, which treats an
     # empty "${array[@]}" as an unbound variable under `set -u`.
-    local opts=(--rm -i)
+    # --privileged: the lfs stage mounts /dev, /proc and /sys for its chroot.
+    local opts=(--rm -i --platform "$PLATFORM" --privileged)
     [ -t 0 ] && opts+=(-t)
     [ -e /dev/kvm ] && opts+=(--device /dev/kvm)   # Linux hosts only
     # Pass through the settings people override on the command line,
     # e.g. `MEM=2G ./laker run` (see config/versions.sh and scripts/run.sh).
     local v
-    for v in JOBS MEM KERNEL_VERSION KERNEL_URL GLIBC_VERSION GLIBC_URL BUSYBOX_VERSION BUSYBOX_URL IMAGE_SIZE_MB; do
+    for v in JOBS MEM KERNEL_VERSION KERNEL_URL LFS_MIRROR IMAGE_SIZE_MB; do
         if [ -n "${!v:-}" ]; then opts+=(-e "$v=${!v}"); fi
     done
     docker run "${opts[@]}" \
@@ -49,11 +55,12 @@ cmd="${1:-help}"; shift || true
 case "$cmd" in
     build) in_env scripts/build.sh "$@" ;;
     run)   in_env scripts/run.sh "$@" ;;
+    lfs)   in_env scripts/lfs.sh "$@" ;;
     shell) in_env bash ;;
     diff)  in_env scripts/source.sh diff "$@" ;;
     reset) in_env scripts/source.sh reset "$@" ;;
     clean)
         rm -rf out
-        in_env bash -c 'b="${BUILD_DIR:-build}"; rm -rf "$b/src" "$b/rootfs" "$b"/*.img "$b/kernel.fragment" "$b/sysroot" "$b/kernel-headers" "$b"/glibc-build-*' ;;
-    *) sed -n '3,16p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
+        in_env bash -c 'b="${BUILD_DIR:-build}"; rm -rf "$b/src" "$b"/*.img "$b/kernel.fragment" "$b/lfs" "$b/lfs-done" "$b/lfs-logs"' ;;
+    *) sed -n '3,18p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
 esac

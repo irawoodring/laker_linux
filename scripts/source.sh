@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Work with your changes to the kernel, glibc or BusyBox source.
+# Work with your changes to the kernel source.
 #
 #   scripts/source.sh diff                    # which files you've changed, in each
 #   scripts/source.sh diff kernel             # show your unsaved kernel edits
@@ -124,7 +124,7 @@ case "${1:-}" in
         else save "$2" "${*:3}"
         fi ;;
     reset)
-        [ $# -eq 2 ] || die "usage: ./laker reset kernel|glibc|busybox"
+        [ $# -eq 2 ] || die "usage: ./laker reset kernel"
         reset_src "$2" ;;
     *) sed -n '3,11p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
 esac
