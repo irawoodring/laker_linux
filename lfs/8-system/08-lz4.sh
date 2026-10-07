@@ -4,6 +4,6 @@
 
 make BUILD_STATIC=no PREFIX=/usr
 
-make -j1 check
+# LakerLinux: test suite left out (see README.md).
 
 make BUILD_STATIC=no PREFIX=/usr install

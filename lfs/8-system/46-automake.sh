@@ -6,6 +6,6 @@
 
 make
 
-make -j$(($(nproc)>4?$(nproc):4)) check
+# LakerLinux: test suite left out (see README.md).
 
 make install

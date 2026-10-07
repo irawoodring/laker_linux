@@ -15,7 +15,7 @@ sed -i '/long long t1;/,+1s/()/(...)/' configure
 make
 make html
 
-awk '/# PASS:/{total+=$3} ; END{print total}' gmp-check-log
+# LakerLinux: the book counts the test suite's passes here; tests are skipped.
 
 make install
 make install-html

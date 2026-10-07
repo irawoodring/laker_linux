@@ -34,6 +34,9 @@ TEST_MARKERS = [
     "su tester", "chown -R tester", "TESTSUITEFLAGS", "test_summary",
     "ninja test", "make -k -j", "runtest", "pytest", "make RUN_EXPENSIVE",
     "ulimit -s", "LC_ALL=en_US.UTF-8 make check",
+    # ...and blocks that only look at test results, or set up for the tests.
+    "grep '^FAIL:'", "gmp-check-log", "check-root", "groupadd -g 102 dummy",
+    "groupdel dummy", "tests/run.sh", "make -j1 check", ") check",
 ]
 
 

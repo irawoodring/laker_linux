@@ -15,11 +15,7 @@ FORCE_UNSAFE_CONFIGURE=1 ./configure \
 
 make
 
-make NON_ROOT_USERNAME=tester check-root
-
-groupadd -g 102 dummy -U tester
-
-groupdel dummy
+# LakerLinux: test suite left out (see README.md).
 
 make install
 

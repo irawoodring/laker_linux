@@ -19,7 +19,7 @@ cd       build
 
 make tooldir=/usr
 
-grep '^FAIL:' $(find -name '*.log')
+# LakerLinux: the book checks the test suite's results here; tests are skipped.
 
 make tooldir=/usr install
 

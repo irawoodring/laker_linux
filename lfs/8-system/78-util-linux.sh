@@ -24,6 +24,6 @@
 
 make
 
-bash tests/run.sh --srcdir=$PWD --builddir=$PWD
+# LakerLinux: test suite left out (see README.md).
 
 make install
