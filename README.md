@@ -6,15 +6,17 @@ It's a tiny distribution you build from source, for learning how an
 operating system goes together: the kernel, the boot process, init, the
 shell, and the build tools that tie it all together.
 
-It starts out deliberately small: a Linux kernel plus [BusyBox](https://busybox.net)
-(one static binary that provides `sh`, `ls`, `mount`, `vi`, `ip`, and ~300 other
-commands), packed into a disk image that boots in QEMU or on a real PC.
-Everything else is up to you.
+It starts out deliberately small: a Linux kernel, the
+[GNU C library](https://www.gnu.org/software/libc/) (glibc), and
+[BusyBox](https://busybox.net) (one program that provides `sh`, `ls`, `mount`,
+`vi`, `ip`, and ~300 other commands), packed into a disk image that boots in QEMU
+or on a real PC. Everything else is up to you.
 
 - [Quick start](#quick-start)
 - [What's in this repository](#whats-in-this-repository)
 - [Where everything comes from](#where-everything-comes-from)
 - [How the build works](#how-the-build-works)
+- [The C library: glibc](#the-c-library-glibc)
 - [Changing the kernel or BusyBox source](#changing-the-kernel-or-busybox-source)
 - [The root filesystem and `rootfs-overlay/`](#the-root-filesystem-and-rootfs-overlay)
 - [How it boots](#how-it-boots)
@@ -26,10 +28,10 @@ Everything else is up to you.
 
 ## Quick start
 
-You need **Docker** and about **10 GB of disk**. Nothing else.
+You need **Docker** and about **12 GB of disk**. Nothing else.
 
 ```sh
-./laker build     # first build: ~10-30 min, mostly the kernel
+./laker build     # first build: ~15-45 min, mostly the kernel and glibc
 ./laker run       # boots in this terminal
 ```
 
@@ -47,7 +49,7 @@ On Debian/Ubuntu, install the toolchain once and set `LAKER_NATIVE=1`:
 ```sh
 sudo apt install build-essential bc bison flex libelf-dev libssl-dev cpio \
     curl xz-utils bzip2 python3 e2fsprogs dosfstools mtools fdisk fakeroot \
-    qemu-system-x86 ovmf
+    qemu-system-x86 ovmf rsync gawk
 LAKER_NATIVE=1 ./laker build
 LAKER_NATIVE=1 ./laker run
 ```
@@ -58,10 +60,11 @@ LAKER_NATIVE=1 ./laker run
 laker                 the front door: build / run / shell / diff / reset / clean
 Dockerfile            the build environment (compilers, QEMU, disk tools)
 config/
-  versions.sh         kernel and BusyBox versions, download URLs, disk layout
+  versions.sh         kernel, glibc and BusyBox versions, download URLs, disk layout
   kernel.fragment     kernel options, applied on top of the x86_64 defaults
-patches/              your changes to the kernel and BusyBox source
+patches/              your changes to the kernel, glibc and BusyBox source
   kernel/             *.patch files applied to the kernel, in name order
+  glibc/              *.patch files applied to glibc
   busybox/            *.patch files applied to BusyBox
 rootfs-overlay/       files copied onto the root filesystem as-is
   etc/inittab         what init (PID 1) starts
@@ -70,7 +73,7 @@ rootfs-overlay/       files copied onto the root filesystem as-is
   etc/passwd, ...     users, hostname, shell profile, login banner
   usr/share/udhcpc/   the script that applies DHCP settings
 scripts/
-  build.sh            the whole build, in five readable stages
+  build.sh            the whole build, in six readable stages
   run.sh              boots the image in QEMU
   source.sh           ./laker diff and ./laker reset
   common.sh           settings shared by the scripts, and the patch handling
@@ -79,22 +82,23 @@ out/                  (generated) lakerlinux.img and bzImage
 ```
 
 The repository holds only *our* files: configuration, scripts, patches, and the
-overlay. The kernel and BusyBox sources are downloaded during the build and
-never committed. Changes to them are kept in `patches/`.
+overlay. The kernel, glibc and BusyBox sources are downloaded during the build
+and never committed. Changes to them are kept in `patches/`.
 
 ## Where everything comes from
 
 | Piece | Where it comes from | Set in |
 |---|---|---|
 | Linux kernel source | The official release tarball from [kernel.org](https://www.kernel.org): `cdn.kernel.org/pub/linux/kernel/v6.x/linux-<version>.tar.xz` | `config/versions.sh` (`KERNEL_VERSION`, `KERNEL_URL`) |
+| glibc source | The official release tarball from the [GNU project](https://ftp.gnu.org/gnu/glibc/): `glibc-<version>.tar.xz` | `config/versions.sh` (`GLIBC_VERSION`, `GLIBC_URL`) |
 | BusyBox source | The official release tarball from [busybox.net](https://busybox.net/downloads/): `busybox-<version>.tar.bz2` | `config/versions.sh` (`BUSYBOX_VERSION`, `BUSYBOX_URL`) |
 | Compilers, `make`, disk tools, QEMU, UEFI firmware | Ubuntu 24.04 packages, installed into the Docker image by `Dockerfile` (or by you, for a native build) | `Dockerfile` |
-| Changes to the kernel and BusyBox source | This repository: `patches/kernel/` and `patches/busybox/` | |
+| Changes to the kernel, glibc and BusyBox source | This repository: `patches/kernel/`, `patches/glibc/` and `patches/busybox/` | |
 | DHCP client script | BusyBox's own example, `examples/udhcp/simple.script`, copied into the overlay | `rootfs-overlay/usr/share/udhcpc/default.script` |
 | Everything else in the image | This repository: `rootfs-overlay/`, plus a few files the build writes (see below) | |
 
 The versions are pinned: currently **Linux 6.18.44** (a long-term-support
-series) and **BusyBox 1.36.1**. To upgrade, change the version in
+series), **glibc 2.42** and **BusyBox 1.36.1**. To upgrade, change the version in
 `config/versions.sh` and run `./laker build`. The build downloads anything it
 doesn't already have.
 
@@ -105,7 +109,8 @@ KERNEL_URL=https://mirrors.edge.kernel.org/pub/linux/kernel/v6.x/linux-6.18.44.t
 ```
 
 Note that the build doesn't verify checksums or signatures on what it
-downloads yet. kernel.org publishes both if you want to add that.
+downloads yet. kernel.org and the GNU project publish both if you want to add
+that.
 
 Downloaded tarballs are cached in `downloads/` inside the build directory (see
 below), so they're fetched once. `./laker clean` keeps them.
@@ -114,11 +119,11 @@ below), so they're fetched once. `./laker clean` keeps them.
 
 `./laker build` runs `scripts/build.sh`. Under Docker, it runs inside a
 container built from `Dockerfile`, which `./laker` builds the first time you use
-it. The script runs five stages in order. You can also run any subset, e.g.
+it. The script runs six stages in order. You can also run any subset, e.g.
 `./laker build rootfs image`.
 
-1. **fetch**: download and unpack the kernel and BusyBox sources, if they
-   aren't already there, and apply `patches/` (see
+1. **fetch**: download and unpack the kernel, glibc and BusyBox sources, if
+   they aren't already there, and apply `patches/` (see
    [Changing the kernel or BusyBox source](#changing-the-kernel-or-busybox-source)).
 2. **kernel**: configure and compile Linux.
    - Bring the source up to date with `patches/kernel/`.
@@ -128,14 +133,22 @@ it. The script runs five stages in order. You can also run any subset, e.g.
      [How it boots](#how-it-boots)).
    - `make olddefconfig` fills in anything that depends on those choices.
    - `make bzImage` builds the compressed kernel, which is copied to `out/bzImage`.
-3. **busybox**: bring the source up to date with `patches/busybox/`, then
+3. **glibc**: build the C library into the *sysroot* (see
+   [The C library: glibc](#the-c-library-glibc)).
+   - Bring the source up to date with `patches/glibc/`.
+   - `make headers_install` copies the kernel's headers into the sysroot.
+   - `configure` sets up a build folder outside the source tree (glibc
+     requires that). This only happens the first time.
+   - `make`, then `make install DESTDIR=<sysroot>`.
+4. **busybox**: bring the source up to date with `patches/busybox/`, then
    configure and compile BusyBox. It starts from BusyBox's `defconfig`
    (nearly every command enabled), then:
-   - turns on `CONFIG_STATIC`, so the binary needs no shared libraries;
+   - points it at the sysroot (`CONFIG_SYSROOT`), so it links against our glibc
+     instead of the build container's C library;
    - turns off `tc`, which doesn't compile against current kernel headers.
-4. **rootfs**: assemble the root filesystem as a plain directory (see the next
-   section).
-5. **image**: pack the kernel and that directory into `out/lakerlinux.img`.
+5. **rootfs**: assemble the root filesystem as a plain directory (see
+   [The root filesystem](#the-root-filesystem-and-rootfs-overlay)).
+6. **image**: pack the kernel and that directory into `out/lakerlinux.img`.
    - Format a FAT filesystem image and copy the kernel into it as
      `EFI/BOOT/BOOTX64.EFI` (`mkfs.vfat`, `mmd`, `mcopy`).
    - Format an ext4 image straight from the rootfs directory (`mke2fs -d`).
@@ -169,7 +182,11 @@ Inside the build directory:
 ```
 downloads/              cached source tarballs
 src/linux-6.18.44/      the kernel source tree (with its .config, and a .git that tracks your edits)
+src/glibc-2.42/         the glibc source tree (likewise)
 src/busybox-1.36.1/     the BusyBox source tree (likewise)
+glibc-build-2.42/       where glibc is compiled (glibc doesn't build inside its source tree)
+kernel-headers/         the kernel's headers, staged before they're copied into the sysroot
+sysroot/                glibc and the kernel headers, for compiling programs for LakerLinux
 kernel.fragment         the fragment as actually applied, with CONFIG_CMDLINE added
 rootfs/                 the root filesystem, as a directory
 esp.img, root.img       the two filesystem images, before they go into the disk image
@@ -178,6 +195,95 @@ esp.img, root.img       the two filesystem images, before they go into the disk 
 To look around in the Docker volume, run `./laker shell` and `cd /build`. The
 kernel tree lives in a volume rather than in this repository because it's large,
 and because macOS's case-insensitive filesystem can't hold it.
+
+## The C library: glibc
+
+Almost every program on Linux is written against the C library. It provides
+`printf`, `malloc`, `open`, and the rest of the C standard library, plus thin
+wrappers around the kernel's system calls. LakerLinux uses
+[glibc](https://www.gnu.org/software/libc/), the C library on most Linux
+distributions.
+
+Programs use it as **shared libraries**: one copy in `/usr/lib`, loaded into
+each program when it starts. The kernel can't do that loading itself. Instead,
+each program names a **dynamic loader**, `/lib64/ld-linux-x86-64.so.2` on x86_64,
+and the kernel runs that first. The loader finds the libraries the program needs,
+maps them into memory, and then jumps to the program.
+
+### The sysroot
+
+The build container has its own C library, but that's Ubuntu's, not ours.
+To compile programs for LakerLinux, the build keeps a separate **sysroot** at
+`sysroot/` in the build directory (`/build/sysroot` in Docker). It's a miniature
+`/usr` holding everything a compiler needs to target LakerLinux:
+
+| In the sysroot | What it is |
+|---|---|
+| `usr/include/linux`, `usr/include/asm`, ... | The kernel's headers, from `make headers_install`. glibc is compiled against them |
+| `usr/include/stdio.h`, ... | glibc's headers |
+| `usr/lib/libc.so.6`, `libm.so.6`, ... | The shared libraries |
+| `usr/lib/libc.a`, `crt1.o`, ... | Static libraries and start-up code, used only when linking |
+
+The compiler's `--sysroot` option makes it use these instead of the
+container's own. BusyBox is built this way.
+
+### What goes into the image
+
+The rootfs stage copies only what programs need at run time: the files in
+`sysroot/usr/lib` named `*.so.*`, with debug information stripped (about 75 MB
+down to 5 MB). It also adds one symlink:
+
+```
+/lib64/ld-linux-x86-64.so.2 -> ../usr/lib/ld-linux-x86-64.so.2
+```
+
+Every x86_64 Linux program has the `/lib64` path built in, so the link has to be
+there, even though LakerLinux keeps its libraries in `/usr/lib`.
+
+BusyBox is now one of those programs. Because it's also `init`, the system
+can't start without glibc: if the loader or `libc.so.6` were missing, the kernel
+would stop with `Kernel panic - not syncing: No working init found`.
+
+### Compiling your own programs
+
+In `./laker shell`, compile with the cross-compiler and the sysroot, then put the
+program in `rootfs-overlay/`. The repository is mounted at `/lakerlinux` in the
+container.
+
+```c
+// hello.c
+#include <stdio.h>
+#include <gnu/libc-version.h>
+
+int main(void)
+{
+    printf("Hello from glibc %s!\n", gnu_get_libc_version());
+    return 0;
+}
+```
+
+```sh
+./laker shell
+mkdir -p /lakerlinux/rootfs-overlay/usr/local/bin
+x86_64-linux-gnu-gcc --sysroot=/build/sysroot -O2 \
+    -o /lakerlinux/rootfs-overlay/usr/local/bin/hello hello.c
+exit
+./laker build rootfs image && ./laker run
+```
+
+Then, inside LakerLinux:
+
+```sh
+hello                                                    # Hello from glibc 2.42!
+/lib64/ld-linux-x86-64.so.2 --list /usr/local/bin/hello  # which libraries it loads
+/usr/lib/libc.so.6                                       # glibc prints its own version
+```
+
+There's no `ldd` command: glibc's `ldd` is a bash script, and LakerLinux has no
+bash. Running the loader with `--list` does the same job.
+
+Use `x86_64-linux-gnu-gcc`, not plain `gcc`. On an Intel/AMD machine they're the
+same compiler, but on Apple Silicon only `x86_64-linux-gnu-gcc` builds x86_64 code.
 
 ## Changing the kernel or BusyBox source
 
@@ -217,6 +323,10 @@ Rebuild and boot. Your message appears in the boot output and in `dmesg`.
 BusyBox works the same way. Its source is in `/build/src/busybox-1.36.1`, and you
 use `./laker build busybox rootfs image` and `./laker diff busybox <name>`.
 
+So does glibc: its source is in `/build/src/glibc-2.42`. After changing it, run
+`./laker build glibc busybox rootfs image` (BusyBox is relinked against the new
+library), and save your changes with `./laker diff glibc <name>`.
+
 ### Why save edits as patches?
 
 Until you save them, your edits exist only in the build directory (for Docker,
@@ -242,7 +352,7 @@ description for people to read. Edit it to explain the change.
 | Command | What it does |
 |---|---|
 | `./laker diff` | Lists the files you've changed (and not saved) in each source tree |
-| `./laker diff kernel` | Shows those changes in full (`busybox` works too) |
+| `./laker diff kernel` | Shows those changes in full (`glibc` and `busybox` work too) |
 | `./laker diff kernel <name>` | Saves them as the next numbered patch in `patches/kernel/` |
 | `./laker reset kernel` | Throws away unsaved changes, back to upstream plus your patches |
 
@@ -253,7 +363,7 @@ small git repository. It commits the pristine source and tags it `upstream`.
 That takes a minute or two the first time for the kernel, and about 600 MB of
 disk. Each patch in `patches/kernel/` is then applied on top as its own commit.
 
-On every build, the kernel and busybox stages compare `patches/` with the patches
+On every build, the kernel, glibc and busybox stages compare `patches/` with the patches
 already applied to the source. If they differ (you pulled a new patch, deleted
 one, or edited one), the build resets the source to `upstream` and applies all of
 `patches/` again, in name order.
@@ -266,7 +376,7 @@ shows only real source changes.
 ## The root filesystem and `rootfs-overlay/`
 
 The rootfs stage builds the root filesystem (everything you see under `/` when
-LakerLinux is running) in three layers:
+LakerLinux is running) in four layers:
 
 1. **Empty directories**: `/dev`, `/proc`, `/sys`, `/run`, `/tmp`, `/root`,
    `/home`, `/mnt`, `/var/log`, `/etc`.
@@ -274,7 +384,9 @@ LakerLinux is running) in three layers:
    creates a symlink for each command it provides: `/bin/ls`, `/bin/sh`,
    `/sbin/init`, `/usr/bin/vi`, and so on. When you run `ls`, BusyBox looks at the
    name it was called by and acts like `ls`.
-3. **The overlay**: everything in `rootfs-overlay/` is copied on top, keeping
+3. **glibc**: the shared libraries in `/usr/lib`, and the dynamic loader's
+   `/lib64` link (see [The C library: glibc](#the-c-library-glibc)).
+4. **The overlay**: everything in `rootfs-overlay/` is copied on top, keeping
    the same paths. `rootfs-overlay/etc/inittab` becomes `/etc/inittab`, and a file
    you add at `rootfs-overlay/usr/local/bin/hello` shows up as
    `/usr/local/bin/hello`.
@@ -300,8 +412,8 @@ What the overlay contains:
 | `etc/issue`, `etc/motd` | Text shown before and after login |
 | `usr/share/udhcpc/default.script` | Called by the DHCP client to set the IP address, route, and `/etc/resolv.conf` |
 
-The result is about 2.5 MB. There's no `/lib`: BusyBox is statically linked, so
-nothing needs shared libraries yet.
+The result is about 6 MB: 5 MB of glibc libraries, plus BusyBox and the
+overlay.
 
 **File ownership.** Every file in the image is owned by root (uid 0). Docker
 builds run as root. Native builds wrap `mke2fs` in `fakeroot`, which makes your
@@ -411,8 +523,8 @@ The kernel always checks for an initramfs `/init` first (its built-in initramfs
 is empty, since `CONFIG_INITRAMFS_SOURCE` is unset). Error -2 means "no such
 file", so it moves on to the `root=` partition. That's expected.
 
-Adding an initramfs makes a good project. Build a directory with a static BusyBox
-and an `/init` script that mounts the real root and runs `switch_root`, then
+Adding an initramfs makes a good project. Build a directory with BusyBox (and
+the glibc files it needs, or a separate static BusyBox) and an `/init` script that mounts the real root and runs `switch_root`, then
 either:
 
 - point `CONFIG_INITRAMFS_SOURCE` at it in `config/kernel.fragment` to build it into the kernel; or
@@ -461,6 +573,8 @@ more.
 | `config/kernel.fragment`       | `./laker build kernel image`          |
 | kernel source code             | `./laker build kernel image`, then `./laker diff kernel <name>` to keep it |
 | BusyBox config or source       | `./laker build busybox rootfs image`  |
+| glibc source                   | `./laker build glibc busybox rootfs image` |
+| a program in `rootfs-overlay/` | `./laker build rootfs image`          |
 | a file in `patches/`           | `./laker build` (the stages re-apply all patches) |
 | a version in `config/versions.sh` | `./laker build`                    |
 | anything, and want to be sure  | `./laker build`                       |
@@ -482,9 +596,10 @@ Ideas for student projects, roughly in order of difficulty:
   the setuid bit.
 - **Boot scripts.** Add `/etc/init.d/S50hello`, then a service that starts at
   boot and stops cleanly at shutdown.
-- **Your first package.** Cross-compile a C program (or a tool like `htop`,
-  `nano`, or `lua`) and install it into the image. Static linking is easy.
-  Dynamic linking means shipping a C library: that's a good lesson in itself.
+- **Your first package.** Start with the hello program in
+  [Compiling your own programs](#compiling-your-own-programs), then build a
+  real tool like `lua`, `nano` (which needs ncurses: a second library to build
+  into the sysroot) or `htop`, and install it into the image.
 - **A package format.** Design a tarball plus manifest format and write a
   `laker-pkg install` command to unpack it into the image.
 - **Verify the downloads.** Have the fetch stage check kernel.org's published
@@ -497,8 +612,9 @@ Ideas for student projects, roughly in order of difficulty:
 - **An initramfs.** See [Why there's no initramfs](#why-theres-no-initramfs).
 - **Replace BusyBox pieces.** Write your own `init`, your own shell, or your
   own `ls`, and swap it in for BusyBox's.
-- **A real toolchain.** Build GCC and musl (or glibc) *for* LakerLinux, so you
-  can compile software inside it. This is the Linux From Scratch path.
+- **A real toolchain.** Build binutils and GCC that run *on* LakerLinux, against
+  its glibc, so you can compile software inside it. This is the Linux From
+  Scratch path.
 
 ## Troubleshooting
 
@@ -522,5 +638,15 @@ Ideas for student projects, roughly in order of difficulty:
 - **"patches/kernel/NNNN-name.patch doesn't apply".** The patch was made
   for different source: another kernel version, or before an earlier patch
   changed the same lines. Fix the patch, or remove it to build without it.
+- **"Kernel panic - not syncing: No working init found".** The kernel couldn't
+  run BusyBox as `init`, usually because glibc's loader or a library is missing
+  from the image. Check that `./laker build` ran the glibc and rootfs stages
+  without errors.
+- **glibc fails with "'-fcf-protection=full' is not supported for this target"
+  (Apple Silicon).** The build container is missing the x86_64 C++
+  cross-compiler, so it's using one for the wrong CPU. Pull the latest version
+  of this repository; its `Dockerfile` installs `g++-x86-64-linux-gnu`. Then delete
+  the glibc build folder (`rm -rf /build/glibc-build-*` in `./laker shell`) so
+  `configure` runs again.
 - **Start over.** `./laker clean` deletes everything except downloaded tarballs.
   Saved patches are safe: they're in `patches/`.

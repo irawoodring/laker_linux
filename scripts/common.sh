@@ -16,16 +16,26 @@ JOBS="${JOBS:-$(nproc)}"
 
 KERNEL_SRC="$SRC_DIR/linux-$KERNEL_VERSION"
 BUSYBOX_SRC="$SRC_DIR/busybox-$BUSYBOX_VERSION"
+GLIBC_SRC="$SRC_DIR/glibc-$GLIBC_VERSION"
+
+# What we build for, and where its C library lives. The sysroot holds glibc's
+# headers and libraries (plus the kernel's headers), so programs are compiled
+# against *our* glibc rather than the build machine's.
+TARGET=x86_64-linux-gnu
+SYSROOT="$BUILD_DIR/sysroot"
 
 log() { printf '\n\033[1;34m==> %s\033[0m\n' "$*"; }
 die() { printf '\033[1;31mERROR: %s\033[0m\n' "$*" >&2; exit 1; }
 
-# kernel|busybox -> its source directory
+COMPONENTS="kernel glibc busybox"
+
+# kernel|glibc|busybox -> its source directory
 src_dir() {
     case "$1" in
         kernel)  echo "$KERNEL_SRC" ;;
+        glibc)   echo "$GLIBC_SRC" ;;
         busybox) echo "$BUSYBOX_SRC" ;;
-        *) die "unknown component '$1' (expected kernel or busybox)" ;;
+        *) die "unknown component '$1' (expected kernel, glibc or busybox)" ;;
     esac
 }
 

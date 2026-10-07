@@ -1,9 +1,10 @@
 # patches/
 
-Changes to the kernel and BusyBox source, kept as patch files.
+Changes to the kernel, glibc and BusyBox source, kept as patch files.
 
 The build unpacks each release tarball, then applies every `*.patch` file in
-`patches/kernel/` or `patches/busybox/`, in name order, before compiling.
+`patches/kernel/`, `patches/glibc/` or `patches/busybox/`, in name order,
+before compiling.
 Because the changes live here instead of only in the build directory, they're
 saved in git, show up in pull requests, and survive `./laker clean` and
 version upgrades.

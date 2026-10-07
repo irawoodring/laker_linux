@@ -2,9 +2,11 @@
 # anything it doesn't already have.
 KERNEL_VERSION="${KERNEL_VERSION:-6.18.44}"
 BUSYBOX_VERSION="${BUSYBOX_VERSION:-1.36.1}"
+GLIBC_VERSION="${GLIBC_VERSION:-2.42}"
 
 KERNEL_URL="${KERNEL_URL:-https://cdn.kernel.org/pub/linux/kernel/v${KERNEL_VERSION%%.*}.x/linux-${KERNEL_VERSION}.tar.xz}"
 BUSYBOX_URL="${BUSYBOX_URL:-https://busybox.net/downloads/busybox-${BUSYBOX_VERSION}.tar.bz2}"
+GLIBC_URL="${GLIBC_URL:-https://ftp.gnu.org/gnu/glibc/glibc-${GLIBC_VERSION}.tar.xz}"
 
 # Disk layout. The partition UUID is fixed so the kernel's built-in command
 # line can always find the root filesystem (root=PARTUUID=...).
