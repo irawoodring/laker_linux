@@ -3,7 +3,8 @@
 # Package: gmp-6.3.0.tar.xz
 # (1 test-suite command block(s) from the book left out.)
 
-ABI=32 ./configure ...
+# LakerLinux: the book shows "ABI=32 ./configure ..." in a note for 32-bit x86
+# systems; it's an example, not a step.
 
 sed -i '/long long t1;/,+1s/()/(...)/' configure
 
