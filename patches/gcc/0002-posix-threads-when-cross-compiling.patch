@@ -1,0 +1,34 @@
+Build libgcc and libstdc++ with POSIX threads support
+
+When GCC is cross-compiled to run on LakerLinux (the devtools stage), its
+build would otherwise pick the "single-threaded" thread header for libgcc and
+libstdc++, and C++ programs couldn't use std::thread. This forces the POSIX
+one. Linux From Scratch makes the same change (chapter 6, "GCC-15.2.0 -
+Pass 2").
+
+diff --git a/libgcc/Makefile.in b/libgcc/Makefile.in
+index 0719fd0..6241384 100644
+--- a/libgcc/Makefile.in
++++ b/libgcc/Makefile.in
+@@ -50,7 +50,7 @@ unwind_header = @unwind_header@
+ md_unwind_def_header = @md_unwind_def_header@
+ md_unwind_header = @md_unwind_header@
+ sfp_machine_header = @sfp_machine_header@
+-thread_header = @thread_header@
++thread_header = gthr-posix.h
+ 
+ host_noncanonical = @host_noncanonical@
+ real_host_noncanonical = @real_host_noncanonical@
+diff --git a/libstdc++-v3/include/Makefile.in b/libstdc++-v3/include/Makefile.in
+index 7b96b22..f072513 100644
+--- a/libstdc++-v3/include/Makefile.in
++++ b/libstdc++-v3/include/Makefile.in
+@@ -345,7 +345,7 @@ target_alias = @target_alias@
+ target_cpu = @target_cpu@
+ target_os = @target_os@
+ target_vendor = @target_vendor@
+-thread_header = @thread_header@
++thread_header = gthr-posix.h
+ tmake_file = @tmake_file@
+ top_build_prefix = @top_build_prefix@
+ top_builddir = @top_builddir@

@@ -124,7 +124,7 @@ case "${1:-}" in
         else save "$2" "${*:3}"
         fi ;;
     reset)
-        [ $# -eq 2 ] || die "usage: ./laker reset kernel|glibc|busybox"
+        [ $# -eq 2 ] || die "usage: ./laker reset <component>  ($COMPONENTS)"
         reset_src "$2" ;;
     *) sed -n '3,11p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
 esac

@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 #
-# Build LakerLinux: a Linux kernel, the GNU C library and a BusyBox userland,
-# packed into a bootable UEFI disk image.
+# Build LakerLinux: a Linux kernel, the GNU C library, a BusyBox userland and
+# a GCC toolchain, packed into a bootable UEFI disk image.
 #
 #   scripts/build.sh            # build everything
-#   scripts/build.sh kernel     # just one stage: fetch|kernel|glibc|busybox|rootfs|image
+#   scripts/build.sh kernel     # just one stage:
+#                               #   fetch|kernel|glibc|cross|devtools|busybox|rootfs|image
 #
 # Every stage is a plain shell function below -- read them, they're short.
 # Shared settings, and the code that applies patches/, are in common.sh.
@@ -21,6 +22,8 @@ fi
 # LOCALVERSION= (set, but empty) stops the kernel adding a "+" to its version
 # because the source tree has commits since the release.
 KMAKE=(make -C "$KERNEL_SRC" ARCH=x86_64 LOCALVERSION= -j"$JOBS")
+# The cross-compiler (stage `cross`) installs here.
+export PATH="$CROSS_DIR/bin:$PATH"
 BBMAKE=(make -C "$BUSYBOX_SRC" -j"$JOBS")
 
 # Run a command as "root" without being root, so files land in the image
@@ -29,7 +32,8 @@ as_root() {
     if [ "$(id -u)" -eq 0 ]; then "$@"; else fakeroot -- "$@"; fi
 }
 
-# download URL -> extracts into $SRC_DIR (skipped if already present)
+# download URL -> extracts into $SRC_DIR (skipped if already present).
+# Pass "nogit" as a third argument for sources we don't track changes to.
 fetch_one() {
     local url="$1" dest="$2" tarball="$DL_DIR/$(basename "$1")"
     [ -d "$dest" ] && return 0
@@ -40,18 +44,69 @@ fetch_one() {
         mv "$tarball.part" "$tarball"
     fi
     log "Extracting $(basename "$tarball")"
-    tar -xf "$tarball" -C "$SRC_DIR"
+    # --no-same-owner: as root (in Docker), tar would otherwise keep the file
+    # owners recorded in the tarball, i.e. its maintainers' user IDs.
+    tar -xf "$tarball" -C "$SRC_DIR" --no-same-owner
     [ -d "$dest" ] || die "expected $dest after extracting $tarball"
-    init_source_git "$dest"
+    [ "${3:-}" = nogit ] || init_source_git "$dest"
+}
+
+# GCC and its three math libraries. GCC builds GMP, MPFR and MPC itself if
+# their sources sit inside its tree as gmp/, mpfr/ and mpc/ (here, symlinks).
+fetch_gcc() {
+    fetch_one "$GCC_URL" "$GCC_SRC"
+    local lib ver url
+    for lib in gmp mpfr mpc; do
+        case $lib in
+            gmp)  ver=$GMP_VERSION;  url=$GMP_URL ;;
+            mpfr) ver=$MPFR_VERSION; url=$MPFR_URL ;;
+            mpc)  ver=$MPC_VERSION;  url=$MPC_URL ;;
+        esac
+        fetch_one "$url" "$SRC_DIR/$lib-$ver" nogit
+        ln -sfn "../$lib-$ver" "$GCC_SRC/$lib"
+        # Keep the links out of ./laker diff gcc.
+        grep -qx "/$lib" "$GCC_SRC/.git/info/exclude" || echo "/$lib" >> "$GCC_SRC/.git/info/exclude"
+    done
+}
+
+# The build machine's own name, for --build. Anything that isn't
+# $CROSS_TARGET makes configure scripts cross-compile.
+build_triplet() { "$GCC_SRC/config.guess"; }
+
+# autobuild NAME SRC BUILD_DIR INSTALL_ARGS -- CONFIGURE_ARGS...
+#   Configure (once) in BUILD_DIR, run make, then `make INSTALL_ARGS install`
+#   unless nothing was rebuilt since the last install. Logs go in BUILD_DIR.
+autobuild() {
+    local name="$1" src="$2" build="$3" install_args="$4"
+    shift 4; [ "$1" = -- ] && shift
+    if [ ! -f "$build/Makefile" ]; then
+        log "Configuring $name"
+        mkdir -p "$build"
+        (cd "$build" && "$src/configure" "$@") > "$build/configure.log" 2>&1 ||
+            { tail -20 "$build/configure.log"; die "$name: configure failed; see $build/configure.log"; }
+    fi
+    log "Building $name"
+    make -C "$build" -j"$JOBS" > "$build/make.log" 2>&1 ||
+        { tail -30 "$build/make.log"; die "$name: build failed; see $build/make.log"; }
+    local stamp="$build/.installed"
+    if [ ! -f "$stamp" ] || [ -n "$(find "$build" -newer "$stamp" -type f ! -name '*.log' -print -quit)" ]; then
+        log "Installing $name"
+        # shellcheck disable=SC2086
+        make -C "$build" $install_args install > "$build/install.log" 2>&1 ||
+            { tail -20 "$build/install.log"; die "$name: install failed; see $build/install.log"; }
+        touch "$stamp"
+    fi
 }
 
 stage_fetch() {
     fetch_one "$KERNEL_URL" "$KERNEL_SRC"
     fetch_one "$GLIBC_URL" "$GLIBC_SRC"
     fetch_one "$BUSYBOX_URL" "$BUSYBOX_SRC"
-    sync_patches kernel
-    sync_patches glibc
-    sync_patches busybox
+    fetch_one "$BINUTILS_URL" "$BINUTILS_SRC"
+    fetch_gcc
+    fetch_one "$MAKE_URL" "$MAKE_SRC"
+    local comp
+    for comp in $COMPONENTS; do sync_patches "$comp"; done
 }
 
 stage_kernel() {
@@ -115,6 +170,71 @@ stage_glibc() {
     fi
 }
 
+# The cross-compiler: binutils and GCC that run in the build container and
+# produce programs for LakerLinux, using the glibc in the sysroot. Like
+# chapter 5 of Linux From Scratch, except that glibc already exists, so GCC
+# is built completely in one go instead of in two passes.
+stage_cross() {
+    [ -f "$SYSROOT/usr/lib/libc.so.6" ] || die "glibc isn't built yet; run ./laker build glibc first"
+    fetch_one "$BINUTILS_URL" "$BINUTILS_SRC"
+    fetch_gcc
+    sync_patches binutils
+    sync_patches gcc
+
+    autobuild "cross binutils $BINUTILS_VERSION" "$BINUTILS_SRC" \
+        "$BUILD_DIR/cross-binutils-$BINUTILS_VERSION" "" -- \
+        --prefix="$CROSS_DIR" --target="$CROSS_TARGET" --with-sysroot="$SYSROOT" \
+        --disable-nls --enable-gprofng=no --disable-werror \
+        --enable-new-dtags --enable-default-hash-style=gnu
+
+    autobuild "cross GCC $GCC_VERSION" "$GCC_SRC" \
+        "$BUILD_DIR/cross-gcc-$GCC_VERSION" "" -- \
+        --prefix="$CROSS_DIR" --target="$CROSS_TARGET" --with-sysroot="$SYSROOT" \
+        --enable-default-pie --enable-default-ssp \
+        --disable-nls --disable-multilib --disable-libsanitizer \
+        --enable-languages=c,c++
+}
+
+# GCC, binutils and make that run *inside* LakerLinux, cross-compiled with the
+# cross-compiler and installed into $DEVTOOLS_ROOT (the rootfs stage copies
+# them into the image). Like chapter 6 of Linux From Scratch.
+stage_devtools() {
+    command -v "$CROSS_TARGET-gcc" >/dev/null || die "no cross-compiler yet; run ./laker build cross first"
+    fetch_one "$BINUTILS_URL" "$BINUTILS_SRC"
+    fetch_gcc
+    fetch_one "$MAKE_URL" "$MAKE_SRC"
+    sync_patches binutils
+    sync_patches gcc
+    sync_patches make
+    local build
+    build="$(build_triplet)"
+
+    autobuild "binutils $BINUTILS_VERSION" "$BINUTILS_SRC" \
+        "$BUILD_DIR/devtools-binutils-$BINUTILS_VERSION" "DESTDIR=$DEVTOOLS_ROOT" -- \
+        --prefix=/usr --build="$build" --host="$CROSS_TARGET" \
+        --disable-nls --enable-shared --enable-gprofng=no --disable-werror \
+        --enable-64-bit-bfd --enable-new-dtags --enable-default-hash-style=gnu
+    # libtool archives only get in the way of linking; LFS removes them too.
+    rm -f "$DEVTOOLS_ROOT"/usr/lib/lib{bfd,ctf,ctf-nobfd,opcodes,sframe}.{a,la}
+
+    # GCC's own target libraries (libgcc, libstdc++) are compiled by the cross
+    # GCC above, which is the same version -- they must match.
+    local gccbuild="$BUILD_DIR/devtools-gcc-$GCC_VERSION"
+    autobuild "GCC $GCC_VERSION" "$GCC_SRC" "$gccbuild" "DESTDIR=$DEVTOOLS_ROOT" -- \
+        --build="$build" --host="$CROSS_TARGET" --target="$CROSS_TARGET" \
+        LDFLAGS_FOR_TARGET="-L$gccbuild/$CROSS_TARGET/libgcc" \
+        --prefix=/usr --with-build-sysroot="$SYSROOT" \
+        --enable-default-pie --enable-default-ssp \
+        --disable-nls --disable-multilib --disable-libatomic --disable-libgomp \
+        --disable-libquadmath --disable-libsanitizer --disable-libssp --disable-libvtv \
+        --enable-languages=c,c++
+    ln -sfn gcc "$DEVTOOLS_ROOT/usr/bin/cc"
+
+    autobuild "make $MAKE_VERSION" "$MAKE_SRC" \
+        "$BUILD_DIR/devtools-make-$MAKE_VERSION" "DESTDIR=$DEVTOOLS_ROOT" -- \
+        --prefix=/usr --build="$build" --host="$CROSS_TARGET" --without-guile
+}
+
 stage_busybox() {
     fetch_one "$BUSYBOX_URL" "$BUSYBOX_SRC"
     sync_patches busybox
@@ -133,6 +253,21 @@ stage_busybox() {
     "${BBMAKE[@]}"
 }
 
+# Remove debug info from every ELF file under a directory. Executables and
+# shared libraries lose their symbol tables too; object files and static
+# libraries keep theirs, because the linker needs them.
+strip_tree() {
+    local f
+    find "$1" -type f \( -perm -u+x -o -name '*.so*' -o -name '*.a' -o -name '*.o' \) -print0 |
+    while IFS= read -r -d '' f; do
+        [ "$(head -c4 "$f" 2>/dev/null | od -An -c | tr -d ' ')" = '177ELF' ] || [[ $f == *.a ]] || continue
+        case "$f" in
+            *.a|*.o) "$TARGET-strip" --strip-debug "$f" 2>/dev/null || true ;;
+            *)       "$TARGET-strip" --strip-unneeded "$f" 2>/dev/null || true ;;
+        esac
+    done
+}
+
 stage_rootfs() {
     log "Assembling root filesystem in $ROOTFS"
     rm -rf "$ROOTFS"
@@ -143,17 +278,24 @@ stage_rootfs() {
     # BusyBox installs itself as /bin/busybox plus a symlink per applet.
     "${BBMAKE[@]}" CONFIG_PREFIX="$ROOTFS" install >/dev/null
 
-    # glibc's run-time pieces: the dynamic loader and the shared libraries.
-    # Headers, static libraries and crt*.o files stay in the sysroot, since
-    # they're only needed for compiling. Stripping debug info takes this from
-    # about 75 MB to 5 MB.
-    mkdir -p "$ROOTFS/usr/lib" "$ROOTFS/lib64"
-    local lib
-    for lib in "$SYSROOT"/usr/lib/*.so.*; do
-        "$TARGET-strip" --strip-debug -o "$ROOTFS/usr/lib/$(basename "$lib")" "$lib"
-    done
+    # The sysroot: glibc (the dynamic loader and shared libraries programs
+    # need to run, plus the headers, crt*.o start-up files and link libraries
+    # that compiling needs) and the kernel's headers.
+    mkdir -p "$ROOTFS/usr" "$ROOTFS/lib64"
+    cp -a "$SYSROOT/usr/include" "$SYSROOT/usr/lib" "$ROOTFS/usr/"
     # Every x86_64 Linux program has this loader path built in.
     ln -s ../usr/lib/ld-linux-x86-64.so.2 "$ROOTFS/lib64/ld-linux-x86-64.so.2"
+
+    # GCC, binutils and make. --remove-destination replaces BusyBox's symlinks
+    # for the same names (ar, strings, ...) instead of writing through them
+    # into /bin/busybox.
+    if [ -d "$DEVTOOLS_ROOT/usr" ]; then
+        cp -a --remove-destination "$DEVTOOLS_ROOT/usr/." "$ROOTFS/usr/"
+    fi
+    rm -rf "$ROOTFS"/usr/share/{info,man,doc}   # no man or info reader here
+
+    # Strip debugging information: about 1 GB of it, mostly in GCC.
+    strip_tree "$ROOTFS"
 
     # Everything students customize lives in rootfs-overlay/.
     cp -a "$LAKER_DIR/rootfs-overlay/." "$ROOTFS/"
@@ -197,19 +339,20 @@ label-id: $DISK_GUID
 start=1MiB, size=${ESP_SIZE_MB}MiB, type=uefi, name="LAKERBOOT"
 start=$((ESP_SIZE_MB + 1))MiB, size=${root_mb}MiB, type=linux, uuid=$ROOT_PARTUUID, name="lakerroot"
 EOF
-    dd if="$esp" of="$disk" bs=1M seek=1 conv=notrunc status=none
-    dd if="$root" of="$disk" bs=1M seek=$((ESP_SIZE_MB + 1)) conv=notrunc status=none
+    # conv=sparse skips all-zero blocks, so the image's empty space takes no disk.
+    dd if="$esp" of="$disk" bs=1M seek=1 conv=notrunc,sparse status=none
+    dd if="$root" of="$disk" bs=1M seek=$((ESP_SIZE_MB + 1)) conv=notrunc,sparse status=none
 
     log "Done: $disk"
     echo "Boot it with: ./laker run"
 }
 
 stages=("$@")
-[ ${#stages[@]} -eq 0 ] && stages=(fetch kernel glibc busybox rootfs image)
+[ ${#stages[@]} -eq 0 ] && stages=(fetch kernel glibc cross devtools busybox rootfs image)
 for s in "${stages[@]}"; do
     case "$s" in
-        fetch|kernel|glibc|busybox|rootfs|image) mkdir -p "$BUILD_DIR"; "stage_$s" ;;
-        *) die "unknown stage '$s' (expected fetch, kernel, glibc, busybox, rootfs, image)" ;;
+        fetch|kernel|glibc|cross|devtools|busybox|rootfs|image) mkdir -p "$BUILD_DIR"; "stage_$s" ;;
+        *) die "unknown stage '$s' (expected fetch, kernel, glibc, cross, devtools, busybox, rootfs, image)" ;;
     esac
 done
 

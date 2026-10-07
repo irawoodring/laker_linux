@@ -9,7 +9,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         e2fsprogs dosfstools mtools fdisk fakeroot \
         qemu-system-x86 ovmf \
         git patch vim nano less \
-        rsync gawk \
+        rsync gawk m4 texinfo \
     && if [ "$(dpkg --print-architecture)" != amd64 ]; then \
         apt-get install -y --no-install-recommends \
             gcc-x86-64-linux-gnu g++-x86-64-linux-gnu libc6-dev-amd64-cross; \

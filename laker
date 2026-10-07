@@ -5,11 +5,12 @@
 #   ./laker build [stage...]   build kernel + userland + disk image (inside Docker)
 #   ./laker run [--direct]     boot out/lakerlinux.img in QEMU
 #   ./laker shell              a shell inside the build container
-#   ./laker diff [kernel|glibc|busybox [name]]
+#   ./laker diff [<component> [name]]
 #                              show your source edits, or save them as a patch
-#   ./laker reset kernel|glibc|busybox
-#                              throw away source edits you haven't saved
+#   ./laker reset <component>  throw away source edits you haven't saved
 #   ./laker clean              delete build output (keeps downloads)
+#
+# Components: kernel, glibc, busybox, binutils, gcc, make.
 #
 # Set LAKER_NATIVE=1 to skip Docker and use your own Linux toolchain
 # (see README.md for the package list).
@@ -54,6 +55,6 @@ case "$cmd" in
     reset) in_env scripts/source.sh reset "$@" ;;
     clean)
         rm -rf out
-        in_env bash -c 'b="${BUILD_DIR:-build}"; rm -rf "$b/src" "$b/rootfs" "$b"/*.img "$b/kernel.fragment" "$b/sysroot" "$b/kernel-headers" "$b"/glibc-build-*' ;;
-    *) sed -n '3,16p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
+        in_env bash -c 'b="${BUILD_DIR:-build}"; rm -rf "$b/src" "$b/rootfs" "$b"/*.img "$b/kernel.fragment" "$b/sysroot" "$b/kernel-headers" "$b"/glibc-build-* "$b"/cross* "$b"/devtools*' ;;
+    *) sed -n '3,17p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
 esac
