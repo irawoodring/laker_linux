@@ -11,17 +11,31 @@ It starts out deliberately small: a Linux kernel plus [BusyBox](https://busybox.
 commands), packed into a disk image that boots in QEMU or on a real PC.
 Everything else is up to you.
 
+- [Quick start](#quick-start)
+- [What's in this repository](#whats-in-this-repository)
+- [Where everything comes from](#where-everything-comes-from)
+- [How the build works](#how-the-build-works)
+- [Changing the kernel or BusyBox source](#changing-the-kernel-or-busybox-source)
+- [The root filesystem and `rootfs-overlay/`](#the-root-filesystem-and-rootfs-overlay)
+- [How it boots](#how-it-boots)
+- [Why there's no initramfs](#why-theres-no-initramfs)
+- [Running LakerLinux](#running-lakerlinux)
+- [Everyday workflow](#everyday-workflow)
+- [Where to take it next](#where-to-take-it-next)
+- [Troubleshooting](#troubleshooting)
+
 ## Quick start
 
 You need **Docker** and about **10 GB of disk**. Nothing else.
 
 ```sh
 ./laker build     # first build: ~10-30 min, mostly the kernel
-./laker run       # boots in this terminal; log in as root (no password)
+./laker run       # boots in this terminal
 ```
 
-Inside LakerLinux, run `poweroff` when you're done. If it gets stuck, press **Ctrl-A**
-then **X** to kill QEMU.
+At the `lakerlinux login:` prompt, type **`root`**. There's no password.
+Inside LakerLinux, run `poweroff` when you're done. If it gets stuck, press
+**Ctrl-A** then **X** to kill QEMU.
 
 Rebuilding after a change only redoes what changed, so later builds take seconds
 to minutes.
@@ -38,23 +52,276 @@ LAKER_NATIVE=1 ./laker build
 LAKER_NATIVE=1 ./laker run
 ```
 
-## What's in here
+## What's in this repository
 
 ```
-laker                 the front door: build / run / shell / clean
+laker                 the front door: build / run / shell / diff / reset / clean
 Dockerfile            the build environment (compilers, QEMU, disk tools)
 config/
-  versions.sh         kernel and BusyBox versions, disk size
+  versions.sh         kernel and BusyBox versions, download URLs, disk layout
   kernel.fragment     kernel options, applied on top of the x86_64 defaults
+patches/              your changes to the kernel and BusyBox source
+  kernel/             *.patch files applied to the kernel, in name order
+  busybox/            *.patch files applied to BusyBox
 rootfs-overlay/       files copied onto the root filesystem as-is
   etc/inittab         what init (PID 1) starts
   etc/init.d/rcS      the boot script
+  etc/init.d/rcK      the shutdown script
   etc/passwd, ...     users, hostname, shell profile, login banner
+  usr/share/udhcpc/   the script that applies DHCP settings
 scripts/
   build.sh            the whole build, in five readable stages
   run.sh              boots the image in QEMU
+  source.sh           ./laker diff and ./laker reset
+  common.sh           settings shared by the scripts, and the patch handling
+build/                (generated, native builds only) sources and intermediate files
 out/                  (generated) lakerlinux.img and bzImage
 ```
+
+The repository holds only *our* files: configuration, scripts, patches, and the
+overlay. The kernel and BusyBox sources are downloaded during the build and
+never committed. Changes to them are kept in `patches/`.
+
+## Where everything comes from
+
+| Piece | Where it comes from | Set in |
+|---|---|---|
+| Linux kernel source | The official release tarball from [kernel.org](https://www.kernel.org): `cdn.kernel.org/pub/linux/kernel/v6.x/linux-<version>.tar.xz` | `config/versions.sh` (`KERNEL_VERSION`, `KERNEL_URL`) |
+| BusyBox source | The official release tarball from [busybox.net](https://busybox.net/downloads/): `busybox-<version>.tar.bz2` | `config/versions.sh` (`BUSYBOX_VERSION`, `BUSYBOX_URL`) |
+| Compilers, `make`, disk tools, QEMU, UEFI firmware | Ubuntu 24.04 packages, installed into the Docker image by `Dockerfile` (or by you, for a native build) | `Dockerfile` |
+| Changes to the kernel and BusyBox source | This repository: `patches/kernel/` and `patches/busybox/` | |
+| DHCP client script | BusyBox's own example, `examples/udhcp/simple.script`, copied into the overlay | `rootfs-overlay/usr/share/udhcpc/default.script` |
+| Everything else in the image | This repository: `rootfs-overlay/`, plus a few files the build writes (see below) | |
+
+The versions are pinned: currently **Linux 6.18.44** (a long-term-support
+series) and **BusyBox 1.36.1**. To upgrade, change the version in
+`config/versions.sh` and run `./laker build`. The build downloads anything it
+doesn't already have.
+
+To download from a mirror instead, override the URL for one build:
+
+```sh
+KERNEL_URL=https://mirrors.edge.kernel.org/pub/linux/kernel/v6.x/linux-6.18.44.tar.xz ./laker build
+```
+
+Note that the build doesn't verify checksums or signatures on what it
+downloads yet. kernel.org publishes both if you want to add that.
+
+Downloaded tarballs are cached in `downloads/` inside the build directory (see
+below), so they're fetched once. `./laker clean` keeps them.
+
+## How the build works
+
+`./laker build` runs `scripts/build.sh`. Under Docker, it runs inside a
+container built from `Dockerfile`, which `./laker` builds the first time you use
+it. The script runs five stages in order. You can also run any subset, e.g.
+`./laker build rootfs image`.
+
+1. **fetch**: download and unpack the kernel and BusyBox sources, if they
+   aren't already there, and apply `patches/` (see
+   [Changing the kernel or BusyBox source](#changing-the-kernel-or-busybox-source)).
+2. **kernel**: configure and compile Linux.
+   - Bring the source up to date with `patches/kernel/`.
+   - `make x86_64_defconfig` starts from the kernel's standard x86_64 defaults.
+   - `scripts/kconfig/merge_config.sh` layers `config/kernel.fragment` on top.
+   - The build also adds `CONFIG_CMDLINE`, the built-in kernel command line (see
+     [How it boots](#how-it-boots)).
+   - `make olddefconfig` fills in anything that depends on those choices.
+   - `make bzImage` builds the compressed kernel, which is copied to `out/bzImage`.
+3. **busybox**: bring the source up to date with `patches/busybox/`, then
+   configure and compile BusyBox. It starts from BusyBox's `defconfig`
+   (nearly every command enabled), then:
+   - turns on `CONFIG_STATIC`, so the binary needs no shared libraries;
+   - turns off `tc`, which doesn't compile against current kernel headers.
+4. **rootfs**: assemble the root filesystem as a plain directory (see the next
+   section).
+5. **image**: pack the kernel and that directory into `out/lakerlinux.img`.
+   - Format a FAT filesystem image and copy the kernel into it as
+     `EFI/BOOT/BOOTX64.EFI` (`mkfs.vfat`, `mmd`, `mcopy`).
+   - Format an ext4 image straight from the rootfs directory (`mke2fs -d`).
+   - Write a GPT partition table into an empty 512 MB file (`sfdisk`), then copy
+     each filesystem image into its partition (`dd`).
+
+   None of this needs root or loop devices, because it only ever works on
+   ordinary files.
+
+> **Configure through the files, not `menuconfig`.** The kernel and busybox
+> stages regenerate `.config` from scratch on every build. If you change options
+> with `make menuconfig` inside `./laker shell`, the next build throws those
+> changes away. Use `menuconfig` to *explore*, then put the options you want in
+> `config/kernel.fragment` (or, for BusyBox, add a `sed` line to the busybox
+> stage in `scripts/build.sh`).
+
+The kernel is built with everything LakerLinux needs compiled in (`=y`), not as
+loadable modules. A dozen defconfig options remain modules (`=m`), mostly
+firewall logging plus `efivarfs`. The build doesn't compile or install modules,
+so those features aren't available. There's no `/lib/modules`.
+
+### Where the build files go
+
+| | Native build (`LAKER_NATIVE=1`) | Docker build |
+|---|---|---|
+| Build directory | `build/` in this repository | `/build` inside the container: a Docker volume named `lakerlinux-build` |
+| Outputs | `out/` | `out/` (shared with your machine) |
+
+Inside the build directory:
+
+```
+downloads/              cached source tarballs
+src/linux-6.18.44/      the kernel source tree (with its .config, and a .git that tracks your edits)
+src/busybox-1.36.1/     the BusyBox source tree (likewise)
+kernel.fragment         the fragment as actually applied, with CONFIG_CMDLINE added
+rootfs/                 the root filesystem, as a directory
+esp.img, root.img       the two filesystem images, before they go into the disk image
+```
+
+To look around in the Docker volume, run `./laker shell` and `cd /build`. The
+kernel tree lives in a volume rather than in this repository because it's large,
+and because macOS's case-insensitive filesystem can't hold it.
+
+## Changing the kernel or BusyBox source
+
+You can change any file in the kernel or BusyBox source. The build compiles
+whatever is in the source tree, and never overwrites your edits.
+
+### The workflow
+
+```sh
+./laker shell                                 # a shell in the build container
+cd /build/src/linux-6.18.44
+vim init/main.c                               # or nano; make your change
+exit
+
+./laker build kernel image                    # recompiles only what you changed
+./laker run                                   # try it
+
+./laker diff kernel                           # review your edits
+./laker diff kernel hello-message             # save them as a patch
+git add patches && git commit -m "Say hello at boot"
+```
+
+For a first experiment, in `init/main.c` find this line:
+
+```c
+	pr_notice("%s", linux_banner);
+```
+
+Add this line right after it:
+
+```c
+	pr_notice("Hello from the LakerLinux kernel!\n");
+```
+
+Rebuild and boot. Your message appears in the boot output and in `dmesg`.
+
+BusyBox works the same way. Its source is in `/build/src/busybox-1.36.1`, and you
+use `./laker build busybox rootfs image` and `./laker diff busybox <name>`.
+
+### Why save edits as patches?
+
+Until you save them, your edits exist only in the build directory (for Docker,
+that's the `lakerlinux-build` volume). They're lost if you run `./laker clean` or
+change `KERNEL_VERSION`, and nobody else can see them.
+
+`./laker diff kernel <name>` saves your edits as a numbered patch file, such as
+`patches/kernel/0001-hello-message.patch`. Commit it to git, and:
+
+- every build, on any machine, applies it automatically after unpacking the source;
+- it shows up in pull requests, so others can review the change;
+- it survives `./laker clean` and kernel upgrades (if it still applies).
+
+This is how distributions maintain their changes to upstream software.
+
+Each `./laker diff kernel <name>` saves only the changes made since the last
+saved patch, so you build up a series: `0001-...`, `0002-...`, and so on. The
+text at the top of a patch file, above the first `diff --git` line, is a
+description for people to read. Edit it to explain the change.
+
+### Commands
+
+| Command | What it does |
+|---|---|
+| `./laker diff` | Lists the files you've changed (and not saved) in each source tree |
+| `./laker diff kernel` | Shows those changes in full (`busybox` works too) |
+| `./laker diff kernel <name>` | Saves them as the next numbered patch in `patches/kernel/` |
+| `./laker reset kernel` | Throws away unsaved changes, back to upstream plus your patches |
+
+### How it works
+
+When the build unpacks a release tarball, it turns the source tree into a
+small git repository. It commits the pristine source and tags it `upstream`.
+That takes a minute or two the first time for the kernel, and about 600 MB of
+disk. Each patch in `patches/kernel/` is then applied on top as its own commit.
+
+On every build, the kernel and busybox stages compare `patches/` with the patches
+already applied to the source. If they differ (you pulled a new patch, deleted
+one, or edited one), the build resets the source to `upstream` and applies all of
+`patches/` again, in name order.
+
+The build won't do that over unsaved edits. Instead it stops and asks you to save
+them (`./laker diff`) or throw them away (`./laker reset`). The trees' own
+`.gitignore` files keep compiled files out of all of this, so `./laker diff`
+shows only real source changes.
+
+## The root filesystem and `rootfs-overlay/`
+
+The rootfs stage builds the root filesystem (everything you see under `/` when
+LakerLinux is running) in three layers:
+
+1. **Empty directories**: `/dev`, `/proc`, `/sys`, `/run`, `/tmp`, `/root`,
+   `/home`, `/mnt`, `/var/log`, `/etc`.
+2. **BusyBox**: `make install` puts the one real program at `/bin/busybox` and
+   creates a symlink for each command it provides: `/bin/ls`, `/bin/sh`,
+   `/sbin/init`, `/usr/bin/vi`, and so on. When you run `ls`, BusyBox looks at the
+   name it was called by and acts like `ls`.
+3. **The overlay**: everything in `rootfs-overlay/` is copied on top, keeping
+   the same paths. `rootfs-overlay/etc/inittab` becomes `/etc/inittab`, and a file
+   you add at `rootfs-overlay/usr/local/bin/hello` shows up as
+   `/usr/local/bin/hello`.
+
+"Overlay" here just means "copied on top". It isn't Linux's `overlayfs`. If a
+file in the overlay has the same path as one BusyBox installed, the overlay's
+version wins.
+
+Last, the build writes `/etc/os-release` with the build date, and makes the
+scripts in `/etc/init.d/` and the DHCP script executable.
+
+What the overlay contains:
+
+| File | Purpose |
+|---|---|
+| `etc/inittab` | Tells BusyBox `init` what to run at boot, on each terminal, and at shutdown |
+| `etc/init.d/rcS` | The boot script: mounts filesystems, sets the hostname, starts networking, then runs any `/etc/init.d/S*` scripts |
+| `etc/init.d/rcK` | The shutdown script: stops the `S*` scripts in reverse order and unmounts everything |
+| `etc/fstab` | Filesystems for `mount -a`: `/proc`, `/sys`, and RAM-backed `tmpfs` at `/run` and `/tmp` |
+| `etc/passwd`, `etc/group` | The user database. Just `root`, with an empty password field (see below) |
+| `etc/hostname`, `etc/hosts` | The machine's name (`lakerlinux`) and local name lookups |
+| `etc/profile` | Shell setup at login: `PATH`, the prompt, `umask` |
+| `etc/issue`, `etc/motd` | Text shown before and after login |
+| `usr/share/udhcpc/default.script` | Called by the DHCP client to set the IP address, route, and `/etc/resolv.conf` |
+
+The result is about 2.5 MB. There's no `/lib`: BusyBox is statically linked, so
+nothing needs shared libraries yet.
+
+**File ownership.** Every file in the image is owned by root (uid 0). Docker
+builds run as root. Native builds wrap `mke2fs` in `fakeroot`, which makes your
+own files look root-owned while the image is written. Nothing is setuid.
+
+**Logging in.** `/etc/passwd` contains one line:
+
+```
+root::0:0:root:/root:/bin/sh
+```
+
+The second field, normally the password hash, is empty, so `login` doesn't ask
+for a password. You can run `passwd` inside LakerLinux, but the next build
+rebuilds the image from the overlay, which undoes it. To set a password for every
+build, put a hash (from `openssl passwd -6`) in that field of
+`rootfs-overlay/etc/passwd`.
+
+Changes you make *inside* a running LakerLinux are saved on the disk image, but
+only until the next `./laker build ... image`. Anything you want to keep belongs
+in `rootfs-overlay/`.
 
 ## How it boots
 
@@ -63,9 +330,8 @@ UEFI firmware                 reads the GPT partition table, finds the FAT
                               "EFI System Partition", and runs
                               \EFI\BOOT\BOOTX64.EFI
   -> Linux kernel             that file *is* the kernel (built with EFI_STUB),
-                              so we don't need GRUB. Its built-in command line
-                              says the root filesystem is the partition with
-                              PARTUUID 4c414b45-...-02.
+                              so we don't need GRUB. It mounts the root
+                              filesystem named in its built-in command line.
     -> /sbin/init             BusyBox init reads /etc/inittab
       -> /etc/init.d/rcS      mounts /proc, /sys, ...; sets the hostname; gets
                               an IP address over DHCP
@@ -74,14 +340,118 @@ UEFI firmware                 reads the GPT partition table, finds the FAT
 
 The disk image (`out/lakerlinux.img`, 512 MB) has two partitions:
 
-| # | Type | Size  | Contents                          |
-|---|------|-------|-----------------------------------|
+| # | Type | Size  | Contents |
+|---|------|-------|----------|
 | 1 | FAT  | 64 MB | `EFI/BOOT/BOOTX64.EFI` (the kernel) |
-| 2 | ext4 | rest  | the root filesystem               |
+| 2 | ext4 | rest  | the root filesystem, with partition UUID `4c414b45-5200-4c49-4e55-580000000002` |
 
-`scripts/build.sh` creates it without root access or loop devices: it formats
-each filesystem as an ordinary file, writes a partition table with `sfdisk`, and
-`dd`s each filesystem into place.
+Step by step:
+
+1. **Firmware.** UEFI firmware (OVMF in QEMU) looks for a FAT partition marked
+   as the "EFI System Partition". On removable media, it runs
+   `\EFI\BOOT\BOOTX64.EFI` from it.
+2. **Kernel.** A kernel built with `CONFIG_EFI_STUB` is also a valid UEFI
+   program, so the firmware runs the kernel directly. Normally a bootloader
+   tells the kernel its options. Here they're compiled in through `CONFIG_CMDLINE`:
+
+   | Option | Meaning |
+   |---|---|
+   | `root=PARTUUID=4c414b45-...-02` | Mount the partition with this GPT ID as `/`. The ID is fixed in `config/versions.sh`, so it's the same in every build |
+   | `rootwait` | Wait for that disk to appear instead of giving up: USB and NVMe disks show up a moment after boot starts |
+   | `console=tty0 console=ttyS0,115200` | Send kernel messages to the screen and to the serial port. The last one listed (serial, which `./laker run` shows you) becomes `/dev/console` |
+
+   The kernel finds its drivers (they're built in), mounts the ext4 partition
+   read-only, and mounts `devtmpfs` on `/dev`, so device files like `/dev/vda`
+   appear without any help from userspace.
+3. **init.** The kernel runs `/sbin/init`, BusyBox's `init`, as process 1. It
+   reads `/etc/inittab`, which tells it to:
+   - run `/etc/init.d/rcS` once;
+   - keep a login prompt (`getty`) running on the serial port and on the
+     first virtual terminal, restarting it after each logout;
+   - run `/etc/init.d/rcK` at shutdown.
+4. **rcS.** The boot script:
+   - mounts everything in `/etc/fstab`, plus `/dev/pts` for terminals;
+   - remounts `/` read-write (the kernel mounts it read-only so it can be
+     checked first; we skip the check);
+   - sets the hostname;
+   - brings up the network and asks for an address over DHCP;
+   - runs every executable `/etc/init.d/S*` script with `start`, in name order.
+5. **Login.** `getty` prints `/etc/issue` and asks for a user name. `login`
+   checks `/etc/passwd`, prints `/etc/motd`, and starts `/bin/sh`, which reads
+   `/etc/profile`.
+
+`./laker run --direct` skips step 1: QEMU loads `out/bzImage` itself and passes
+the command line with `-append`.
+
+## Why there's no initramfs
+
+On most distributions, the kernel doesn't mount your real root filesystem
+first. Instead it unpacks an **initramfs**: a small archive (in `cpio` format) of
+files that's loaded into memory along with the kernel. The kernel runs that
+archive's `/init` program, which prepares the real root filesystem and then
+switches to it. Distributions need this step because their kernels are generic:
+they can only reach the root filesystem after userspace has done some setup, such
+as:
+
+- loading the kernel modules for the disk controller and filesystem;
+- unlocking an encrypted disk, or assembling RAID or LVM volumes;
+- finding the root filesystem by label or UUID, or over the network.
+
+LakerLinux needs none of that. The storage drivers and ext4 are compiled into
+the kernel, and the kernel can find a partition by its PARTUUID by itself. So it
+mounts the root filesystem directly and runs `/sbin/init` from it.
+
+You may notice this line in the boot messages:
+
+```
+check access for rdinit=/init failed: -2, ignoring
+```
+
+The kernel always checks for an initramfs `/init` first (its built-in initramfs
+is empty, since `CONFIG_INITRAMFS_SOURCE` is unset). Error -2 means "no such
+file", so it moves on to the `root=` partition. That's expected.
+
+Adding an initramfs makes a good project. Build a directory with a static BusyBox
+and an `/init` script that mounts the real root and runs `switch_root`, then
+either:
+
+- point `CONFIG_INITRAMFS_SOURCE` at it in `config/kernel.fragment` to build it into the kernel; or
+- pack it with `cpio` and load it separately (`-initrd` in QEMU, or `initrd=` on
+  the EFI stub's command line).
+
+## Running LakerLinux
+
+`./laker run` starts QEMU with:
+
+- 1 GB of RAM (set `MEM=2G` to change it) and 2 CPUs;
+- the disk image attached as a virtio disk, `/dev/vda` inside LakerLinux;
+- a virtio network card, `eth0`;
+- no graphical window: the serial console is your terminal.
+
+On a Linux host where `/dev/kvm` is available, QEMU uses hardware
+virtualization and boots in a few seconds. Elsewhere (including macOS) it
+emulates the CPU, which is slower but works.
+
+**Networking.** QEMU's built-in "user mode" network gives LakerLinux a private
+network:
+
+| Address | What it is |
+|---|---|
+| `10.0.2.15` | LakerLinux |
+| `10.0.2.2` | The gateway: your computer, as seen from LakerLinux |
+| `10.0.2.3` | The DNS server (QEMU forwards lookups to your computer's resolver) |
+
+LakerLinux can reach the internet through it: try `nslookup gvsu.edu` or
+`wget -O - http://example.com`. Nothing outside can connect *in* to LakerLinux
+unless you add a port forward to `scripts/run.sh` (QEMU's `hostfwd` option). `ping`
+to outside hosts may not work, depending on your computer's settings, even when
+everything else does.
+
+**Booting a real machine.** Write `out/lakerlinux.img` to a USB stick (with
+`dd`, or a tool like balenaEtcher), turn off Secure Boot, and boot from USB in
+UEFI mode. The kernel includes drivers for common SATA and NVMe disks, Intel
+network cards, and a basic framebuffer console. Your machine's hardware may need
+more.
 
 ## Everyday workflow
 
@@ -89,18 +459,19 @@ each filesystem as an ordinary file, writes a partition table with `sfdisk`, and
 |--------------------------------|---------------------------------------|
 | something in `rootfs-overlay/` | `./laker build rootfs image`          |
 | `config/kernel.fragment`       | `./laker build kernel image`          |
-| kernel source code             | `./laker build kernel image`          |
-| BusyBox config/source          | `./laker build busybox rootfs image`  |
+| kernel source code             | `./laker build kernel image`, then `./laker diff kernel <name>` to keep it |
+| BusyBox config or source       | `./laker build busybox rootfs image`  |
+| a file in `patches/`           | `./laker build` (the stages re-apply all patches) |
+| a version in `config/versions.sh` | `./laker build`                    |
 | anything, and want to be sure  | `./laker build`                       |
 
 `./laker run --direct` has QEMU load the kernel itself instead of going through
 UEFI firmware. It's faster, and handy when you're iterating on the kernel.
 
 `./laker shell` opens a shell inside the build container. The sources live in
-`/build/src` there, for running `make menuconfig` and other tools by hand.
-
-Booting a real machine: write `out/lakerlinux.img` to a USB stick (with `dd`, or
-a tool like balenaEtcher), turn off Secure Boot, and boot from USB in UEFI mode.
+`/build/src` there. The container has `vim`, `nano`, `git` and `less` for
+editing and exploring the source, and `make menuconfig` for browsing kernel
+options.
 
 ## Where to take it next
 
@@ -116,8 +487,14 @@ Ideas for student projects, roughly in order of difficulty:
   Dynamic linking means shipping a C library: that's a good lesson in itself.
 - **A package format.** Design a tarball plus manifest format and write a
   `laker-pkg install` command to unpack it into the image.
-- **Kernel hacking.** Write a "hello world" kernel module. Add a `/proc` file.
-  Add a system call and a userspace program that calls it.
+- **Verify the downloads.** Have the fetch stage check kernel.org's published
+  checksums (or PGP signatures) before unpacking anything.
+- **Kernel hacking.** Start with the hello message in
+  [Changing the kernel or BusyBox source](#changing-the-kernel-or-busybox-source).
+  Write a "hello world" kernel module. Teach the build to
+  compile and install modules into `/lib/modules`. Add a `/proc` file. Add a
+  system call and a userspace program that calls it.
+- **An initramfs.** See [Why there's no initramfs](#why-theres-no-initramfs).
 - **Replace BusyBox pieces.** Write your own `init`, your own shell, or your
   own `ls`, and swap it in for BusyBox's.
 - **A real toolchain.** Build GCC and musl (or glibc) *for* LakerLinux, so you
@@ -134,4 +511,16 @@ Ideas for student projects, roughly in order of difficulty:
   (This path hasn't been tested as much as x86_64 Linux hosts yet.)
 - **"No UEFI firmware (OVMF) found".** Install your distro's `ovmf` package, or
   use `./laker run --direct`.
+- **My `menuconfig` changes disappeared.** The build regenerates `.config` every
+  time. Put kernel options in `config/kernel.fragment` instead.
+- **My changes inside LakerLinux disappeared.** The image is rebuilt from
+  `rootfs-overlay/` each time. Put files there instead.
+- **"patches/kernel/ changed, but the kernel source has unsaved edits".** A
+  patch was added, removed or changed (often by a `git pull`) while you had
+  edits in progress. Save your edits with `./laker diff kernel <name>`, or
+  throw them away with `./laker reset kernel`, then build again.
+- **"patches/kernel/NNNN-name.patch doesn't apply".** The patch was made
+  for different source: another kernel version, or before an earlier patch
+  changed the same lines. Fix the patch, or remove it to build without it.
 - **Start over.** `./laker clean` deletes everything except downloaded tarballs.
+  Saved patches are safe: they're in `patches/`.

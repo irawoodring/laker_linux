@@ -5,6 +5,10 @@
 #   ./laker build [stage...]   build kernel + userland + disk image (inside Docker)
 #   ./laker run [--direct]     boot out/lakerlinux.img in QEMU
 #   ./laker shell              a shell inside the build container
+#   ./laker diff [kernel|busybox [name]]
+#                              show your source edits, or save them as a patch
+#   ./laker reset kernel|busybox
+#                              throw away source edits you haven't saved
 #   ./laker clean              delete build output (keeps downloads)
 #
 # Set LAKER_NATIVE=1 to skip Docker and use your own Linux toolchain
@@ -29,9 +33,14 @@ in_env() {
     local opts=(--rm -i)
     [ -t 0 ] && opts+=(-t)
     [ -e /dev/kvm ] && opts+=(--device /dev/kvm)   # Linux hosts only
+    # Pass through the settings people override on the command line,
+    # e.g. `MEM=2G ./laker run` (see config/versions.sh and scripts/run.sh).
+    local v
+    for v in JOBS MEM KERNEL_VERSION KERNEL_URL BUSYBOX_VERSION BUSYBOX_URL IMAGE_SIZE_MB; do
+        if [ -n "${!v:-}" ]; then opts+=(-e "$v=${!v}"); fi
+    done
     docker run "${opts[@]}" \
-        -v "$PWD:/lakerlinux" -v "$VOLUME:/build" \
-        -e BUILD_DIR=/build -e JOBS="${JOBS:-}" \
+        -v "$PWD:/lakerlinux" -v "$VOLUME:/build" -e BUILD_DIR=/build \
         -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" \
         "$IMAGE" "$@"
 }
@@ -41,8 +50,10 @@ case "$cmd" in
     build) in_env scripts/build.sh "$@" ;;
     run)   in_env scripts/run.sh "$@" ;;
     shell) in_env bash ;;
+    diff)  in_env scripts/source.sh diff "$@" ;;
+    reset) in_env scripts/source.sh reset "$@" ;;
     clean)
         rm -rf out
         in_env bash -c 'b="${BUILD_DIR:-build}"; rm -rf "$b/src" "$b/rootfs" "$b"/*.img "$b/kernel.fragment"' ;;
-    *) sed -n '3,12p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
+    *) sed -n '3,16p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
 esac
