@@ -10,7 +10,10 @@
 #   ./laker reset <component>  throw away source edits you haven't saved
 #   ./laker clean              delete build output (keeps downloads)
 #
-# Components: kernel, glibc, busybox, binutils, gcc, make.
+# Components: kernel, glibc, busybox, binutils, gcc, tcc, make.
+#
+# Choose the compiler with COMPILER=gcc (default), tcc or both, e.g.
+#   COMPILER=tcc ./laker build
 #
 # Set LAKER_NATIVE=1 to skip Docker and use your own Linux toolchain
 # (see README.md for the package list).
@@ -37,7 +40,7 @@ in_env() {
     # Pass through the settings people override on the command line,
     # e.g. `MEM=2G ./laker run` (see config/versions.sh and scripts/run.sh).
     local v
-    for v in JOBS MEM KERNEL_VERSION KERNEL_URL GLIBC_VERSION GLIBC_URL BUSYBOX_VERSION BUSYBOX_URL IMAGE_SIZE_MB; do
+    for v in COMPILER JOBS MEM KERNEL_VERSION KERNEL_URL GLIBC_VERSION GLIBC_URL BUSYBOX_VERSION BUSYBOX_URL TCC_COMMIT TCC_URL IMAGE_SIZE_MB; do
         if [ -n "${!v:-}" ]; then opts+=(-e "$v=${!v}"); fi
     done
     docker run "${opts[@]}" \
@@ -55,6 +58,6 @@ case "$cmd" in
     reset) in_env scripts/source.sh reset "$@" ;;
     clean)
         rm -rf out
-        in_env bash -c 'b="${BUILD_DIR:-build}"; rm -rf "$b/src" "$b/rootfs" "$b"/*.img "$b/kernel.fragment" "$b/sysroot" "$b/kernel-headers" "$b"/glibc-build-* "$b"/cross* "$b"/devtools*' ;;
-    *) sed -n '3,17p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
+        in_env bash -c 'b="${BUILD_DIR:-build}"; rm -rf "$b/src" "$b/rootfs" "$b"/*.img "$b/kernel.fragment" "$b/sysroot" "$b/kernel-headers" "$b"/glibc-build-* "$b"/cross* "$b"/devtools* "$b/tcc-build" "$b"/make-build-*' ;;
+    *) sed -n '3,20p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
 esac

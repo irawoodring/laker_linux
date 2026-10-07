@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 #
 # Build LakerLinux: a Linux kernel, the GNU C library, a BusyBox userland and
-# a GCC toolchain, packed into a bootable UEFI disk image.
+# a C compiler (GCC or TCC, see COMPILER in config/versions.sh), packed into a
+# bootable UEFI disk image.
 #
 #   scripts/build.sh            # build everything
 #   scripts/build.sh kernel     # just one stage:
@@ -71,7 +72,7 @@ fetch_gcc() {
 
 # The build machine's own name, for --build. Anything that isn't
 # $CROSS_TARGET makes configure scripts cross-compile.
-build_triplet() { "$GCC_SRC/config.guess"; }
+build_triplet() { "$MAKE_SRC/build-aux/config.guess"; }
 
 # autobuild NAME SRC BUILD_DIR INSTALL_ARGS -- CONFIGURE_ARGS...
 #   Configure (once) in BUILD_DIR, run make, then `make INSTALL_ARGS install`
@@ -88,7 +89,9 @@ autobuild() {
     log "Building $name"
     make -C "$build" -j"$JOBS" > "$build/make.log" 2>&1 ||
         { tail -30 "$build/make.log"; die "$name: build failed; see $build/make.log"; }
-    local stamp="$build/.installed"
+    # The stamp's name depends on where it installs, so a new destination
+    # gets a fresh install.
+    local stamp="$build/.installed-$(echo "$install_args" | md5sum | cut -c1-8)"
     if [ ! -f "$stamp" ] || [ -n "$(find "$build" -newer "$stamp" -type f ! -name '*.log' -print -quit)" ]; then
         log "Installing $name"
         # shellcheck disable=SC2086
@@ -102,11 +105,17 @@ stage_fetch() {
     fetch_one "$KERNEL_URL" "$KERNEL_SRC"
     fetch_one "$GLIBC_URL" "$GLIBC_SRC"
     fetch_one "$BUSYBOX_URL" "$BUSYBOX_SRC"
-    fetch_one "$BINUTILS_URL" "$BINUTILS_SRC"
-    fetch_gcc
     fetch_one "$MAKE_URL" "$MAKE_SRC"
+    if wants gcc; then
+        fetch_one "$BINUTILS_URL" "$BINUTILS_SRC"
+        fetch_gcc
+    fi
+    if wants tcc; then fetch_one "$TCC_URL" "$TCC_SRC"; fi
     local comp
-    for comp in $COMPONENTS; do sync_patches "$comp"; done
+    for comp in $COMPONENTS; do
+        [ -d "$(src_dir "$comp")" ] && sync_patches "$comp"
+    done
+    return 0
 }
 
 stage_kernel() {
@@ -175,6 +184,10 @@ stage_glibc() {
 # chapter 5 of Linux From Scratch, except that glibc already exists, so GCC
 # is built completely in one go instead of in two passes.
 stage_cross() {
+    if ! wants gcc; then
+        log "Skipping the cross-compiler: only needed for GCC (COMPILER=$COMPILER)"
+        return 0
+    fi
     [ -f "$SYSROOT/usr/lib/libc.so.6" ] || die "glibc isn't built yet; run ./laker build glibc first"
     fetch_one "$BINUTILS_URL" "$BINUTILS_SRC"
     fetch_gcc
@@ -195,32 +208,41 @@ stage_cross() {
         --enable-languages=c,c++
 }
 
-# GCC, binutils and make that run *inside* LakerLinux, cross-compiled with the
-# cross-compiler and installed into $DEVTOOLS_ROOT (the rootfs stage copies
-# them into the image). Like chapter 6 of Linux From Scratch.
+# The compiler(s) chosen by COMPILER, and make, all built to run *inside*
+# LakerLinux and installed under $DEVTOOLS_ROOT (the rootfs stage copies them
+# into the image).
 stage_devtools() {
+    [ -f "$SYSROOT/usr/lib/libc.so.6" ] || die "glibc isn't built yet; run ./laker build glibc first"
+    fetch_one "$MAKE_URL" "$MAKE_SRC"
+    sync_patches make
+    if wants gcc; then devtools_gcc; fi
+    if wants tcc; then devtools_tcc; fi
+    devtools_make
+}
+
+# GCC and binutils, cross-compiled with the cross-compiler. Like chapter 6
+# of Linux From Scratch.
+devtools_gcc() {
     command -v "$CROSS_TARGET-gcc" >/dev/null || die "no cross-compiler yet; run ./laker build cross first"
     fetch_one "$BINUTILS_URL" "$BINUTILS_SRC"
     fetch_gcc
-    fetch_one "$MAKE_URL" "$MAKE_SRC"
     sync_patches binutils
     sync_patches gcc
-    sync_patches make
-    local build
+    local build root="$DEVTOOLS_ROOT/gcc"
     build="$(build_triplet)"
 
     autobuild "binutils $BINUTILS_VERSION" "$BINUTILS_SRC" \
-        "$BUILD_DIR/devtools-binutils-$BINUTILS_VERSION" "DESTDIR=$DEVTOOLS_ROOT" -- \
+        "$BUILD_DIR/devtools-binutils-$BINUTILS_VERSION" "DESTDIR=$root" -- \
         --prefix=/usr --build="$build" --host="$CROSS_TARGET" \
         --disable-nls --enable-shared --enable-gprofng=no --disable-werror \
         --enable-64-bit-bfd --enable-new-dtags --enable-default-hash-style=gnu
     # libtool archives only get in the way of linking; LFS removes them too.
-    rm -f "$DEVTOOLS_ROOT"/usr/lib/lib{bfd,ctf,ctf-nobfd,opcodes,sframe}.{a,la}
+    rm -f "$root"/usr/lib/lib{bfd,ctf,ctf-nobfd,opcodes,sframe}.{a,la}
 
     # GCC's own target libraries (libgcc, libstdc++) are compiled by the cross
     # GCC above, which is the same version -- they must match.
     local gccbuild="$BUILD_DIR/devtools-gcc-$GCC_VERSION"
-    autobuild "GCC $GCC_VERSION" "$GCC_SRC" "$gccbuild" "DESTDIR=$DEVTOOLS_ROOT" -- \
+    autobuild "GCC $GCC_VERSION" "$GCC_SRC" "$gccbuild" "DESTDIR=$root" -- \
         --build="$build" --host="$CROSS_TARGET" --target="$CROSS_TARGET" \
         LDFLAGS_FOR_TARGET="-L$gccbuild/$CROSS_TARGET/libgcc" \
         --prefix=/usr --with-build-sysroot="$SYSROOT" \
@@ -228,11 +250,54 @@ stage_devtools() {
         --disable-nls --disable-multilib --disable-libatomic --disable-libgomp \
         --disable-libquadmath --disable-libsanitizer --disable-libssp --disable-libvtv \
         --enable-languages=c,c++
-    ln -sfn gcc "$DEVTOOLS_ROOT/usr/bin/cc"
+    ln -sfn gcc "$root/usr/bin/cc"
+}
 
+# TCC, the Tiny C Compiler: compiler, assembler and linker in one program.
+# It needs no cross-compiler of its own: the build container's x86_64
+# compiler builds it, against the glibc in the sysroot.
+devtools_tcc() {
+    fetch_one "$TCC_URL" "$TCC_SRC"
+    sync_patches tcc
+    # --cross-prefix chooses that compiler; the paths are where the new tcc
+    # will find headers and libraries inside LakerLinux. {B} is TCC's own
+    # directory (/usr/lib/tcc), where it keeps libtcc1.a and its headers.
+    # x86_64-libtcc1-usegcc=yes: compile TCC's runtime library, libtcc1.a,
+    # with that compiler too (normally TCC compiles it with the tcc it just
+    # built, but that tcc runs on LakerLinux, not here).
+    local build="$BUILD_DIR/tcc-build" root="$DEVTOOLS_ROOT/tcc"
+    local args=(--prefix=/usr --cpu=x86_64 --cross-prefix="$TARGET-"
+                --extra-cflags="-O2 --sysroot=$SYSROOT" --extra-ldflags="--sysroot=$SYSROOT"
+                --crtprefix=/usr/lib --libpaths='{B}:/usr/lib'
+                --sysincludepaths='{B}/include:/usr/include'
+                --elfinterp=/lib64/ld-linux-x86-64.so.2)
+    # Built in a copy of its source tree (rsync refreshes it with any edits):
+    # TCC's runtime library Makefile only works when building in-tree.
+    mkdir -p "$build"
+    rsync -a --exclude=.git "$TCC_SRC/" "$build/"
+    # Configure again whenever the options above change.
+    if [ ! -f "$build/config.mak" ] || [ "${args[*]}" != "$(cat "$build/.configure-args" 2>/dev/null)" ]; then
+        log "Configuring TCC"
+        (cd "$build" && ./configure "${args[@]}") > "$build/configure.log" 2>&1 ||
+            { tail -20 "$build/configure.log"; die "TCC configure failed; see $build/configure.log"; }
+        echo "${args[*]}" > "$build/.configure-args"
+    fi
+    log "Building TCC"
+    make -C "$build" -j"$JOBS" x86_64-libtcc1-usegcc=yes > "$build/make.log" 2>&1 ||
+        { tail -30 "$build/make.log"; die "TCC build failed; see $build/make.log"; }
+    make -C "$build" x86_64-libtcc1-usegcc=yes DESTDIR="$root" install > "$build/install.log" 2>&1 ||
+        { tail -20 "$build/install.log"; die "TCC install failed; see $build/install.log"; }
+    ln -sfn tcc "$root/usr/bin/cc"
+}
+
+# GNU make, built with the build container's x86_64 compiler, so it doesn't
+# need GCC's cross-compiler and works with either COMPILER.
+devtools_make() {
     autobuild "make $MAKE_VERSION" "$MAKE_SRC" \
-        "$BUILD_DIR/devtools-make-$MAKE_VERSION" "DESTDIR=$DEVTOOLS_ROOT" -- \
-        --prefix=/usr --build="$build" --host="$CROSS_TARGET" --without-guile
+        "$BUILD_DIR/make-build-$MAKE_VERSION" "DESTDIR=$DEVTOOLS_ROOT/make" -- \
+        --prefix=/usr --build="$(build_triplet)" --host="$CROSS_TARGET" \
+        --without-guile --disable-nls \
+        CC="$TARGET-gcc --sysroot=$SYSROOT" AR="$TARGET-ar" RANLIB="$TARGET-ranlib"
 }
 
 stage_busybox() {
@@ -286,13 +351,24 @@ stage_rootfs() {
     # Every x86_64 Linux program has this loader path built in.
     ln -s ../usr/lib/ld-linux-x86-64.so.2 "$ROOTFS/lib64/ld-linux-x86-64.so.2"
 
-    # GCC, binutils and make. --remove-destination replaces BusyBox's symlinks
-    # for the same names (ar, strings, ...) instead of writing through them
-    # into /bin/busybox.
-    if [ -d "$DEVTOOLS_ROOT/usr" ]; then
-        cp -a --remove-destination "$DEVTOOLS_ROOT/usr/." "$ROOTFS/usr/"
-    fi
+    # make, then the chosen compiler(s): TCC before GCC, so with both, cc
+    # runs gcc. --remove-destination replaces BusyBox's symlinks for the same
+    # names (ar, strings, ...) instead of writing through them into
+    # /bin/busybox.
+    local tools=(make) t
+    if wants tcc; then tools+=(tcc); fi
+    if wants gcc; then tools+=(gcc); fi
+    for t in "${tools[@]}"; do
+        [ -d "$DEVTOOLS_ROOT/$t/usr" ] || die "$t isn't built yet; run ./laker build devtools first"
+        cp -a --remove-destination "$DEVTOOLS_ROOT/$t/usr/." "$ROOTFS/usr/"
+    done
     rm -rf "$ROOTFS"/usr/share/{info,man,doc}   # no man or info reader here
+
+    # TCC's own source, so you can rebuild TCC with TCC inside LakerLinux.
+    if wants tcc; then
+        mkdir -p "$ROOTFS/usr/src"
+        rsync -a --exclude=.git "$TCC_SRC/" "$ROOTFS/usr/src/tinycc/"
+    fi
 
     # Strip debugging information: about 1 GB of it, mostly in GCC.
     strip_tree "$ROOTFS"

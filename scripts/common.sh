@@ -20,6 +20,7 @@ GLIBC_SRC="$SRC_DIR/glibc-$GLIBC_VERSION"
 BINUTILS_SRC="$SRC_DIR/binutils-$BINUTILS_VERSION"
 GCC_SRC="$SRC_DIR/gcc-$GCC_VERSION"
 MAKE_SRC="$SRC_DIR/make-$MAKE_VERSION"
+TCC_SRC="$SRC_DIR/tinycc-$TCC_COMMIT"
 
 # What we build for, and where its C library lives. The sysroot holds glibc's
 # headers and libraries (plus the kernel's headers), so programs are compiled
@@ -32,12 +33,21 @@ SYSROOT="$BUILD_DIR/sysroot"
 # systems treat this as cross-compiling (the same trick LFS uses).
 CROSS_TARGET=x86_64-laker-linux-gnu
 CROSS_DIR="$BUILD_DIR/cross"           # the cross-compiler: runs here, builds for LakerLinux
-DEVTOOLS_ROOT="$BUILD_DIR/devtools"    # GCC, binutils and make that run inside LakerLinux
+# Compilers and make that run inside LakerLinux, before they go into the
+# image: devtools/gcc (GCC and binutils), devtools/tcc and devtools/make.
+DEVTOOLS_ROOT="$BUILD_DIR/devtools"
+
+case "$COMPILER" in
+    gcc|tcc|both) ;;
+    *) printf 'ERROR: COMPILER must be gcc, tcc or both (not "%s")\n' "$COMPILER" >&2; exit 1 ;;
+esac
+# wants gcc|tcc: does COMPILER include this compiler?
+wants() { [ "$COMPILER" = both ] || [ "$COMPILER" = "$1" ]; }
 
 log() { printf '\n\033[1;34m==> %s\033[0m\n' "$*"; }
 die() { printf '\033[1;31mERROR: %s\033[0m\n' "$*" >&2; exit 1; }
 
-COMPONENTS="kernel glibc busybox binutils gcc make"
+COMPONENTS="kernel glibc busybox binutils gcc tcc make"
 
 # component -> its source directory
 src_dir() {
@@ -47,6 +57,7 @@ src_dir() {
         busybox)  echo "$BUSYBOX_SRC" ;;
         binutils) echo "$BINUTILS_SRC" ;;
         gcc)      echo "$GCC_SRC" ;;
+        tcc)      echo "$TCC_SRC" ;;
         make)     echo "$MAKE_SRC" ;;
         *) die "unknown component '$1' (expected one of: $COMPONENTS)" ;;
     esac

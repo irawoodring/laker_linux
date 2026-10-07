@@ -1,3 +1,10 @@
+# Which C compiler LakerLinux ships (see "Choosing a compiler" in README.md):
+#   gcc   GCC 15 and binutils: C and C++, optimizing; about an hour to build
+#   tcc   the Tiny C Compiler: C only, tiny and fast; builds in a minute
+#   both  both of them (cc runs gcc)
+# Override it for one build with e.g. COMPILER=tcc ./laker build
+COMPILER="${COMPILER:-gcc}"
+
 # Pinned upstream versions. Bump these to upgrade; the build re-downloads
 # anything it doesn't already have.
 KERNEL_VERSION="${KERNEL_VERSION:-6.18.44}"
@@ -10,6 +17,9 @@ GMP_VERSION="${GMP_VERSION:-6.3.0}"
 MPFR_VERSION="${MPFR_VERSION:-4.2.2}"
 MPC_VERSION="${MPC_VERSION:-1.3.1}"
 MAKE_VERSION="${MAKE_VERSION:-4.4.1}"
+# TCC's last release (0.9.27) is from 2017 and predates today's glibc, so this
+# pins a commit from its active development branch, "mob".
+TCC_COMMIT="${TCC_COMMIT:-43c7708b85681a2fd4451c8a541af4494a8919b2}"
 
 KERNEL_URL="${KERNEL_URL:-https://cdn.kernel.org/pub/linux/kernel/v${KERNEL_VERSION%%.*}.x/linux-${KERNEL_VERSION}.tar.xz}"
 BUSYBOX_URL="${BUSYBOX_URL:-https://busybox.net/downloads/busybox-${BUSYBOX_VERSION}.tar.bz2}"
@@ -21,6 +31,7 @@ GMP_URL="$GNU_MIRROR/gmp/gmp-${GMP_VERSION}.tar.xz"
 MPFR_URL="$GNU_MIRROR/mpfr/mpfr-${MPFR_VERSION}.tar.xz"
 MPC_URL="$GNU_MIRROR/mpc/mpc-${MPC_VERSION}.tar.gz"
 MAKE_URL="$GNU_MIRROR/make/make-${MAKE_VERSION}.tar.gz"
+TCC_URL="${TCC_URL:-https://github.com/TinyCC/tinycc/archive/${TCC_COMMIT}.tar.gz}"
 
 # Disk layout. The partition UUID is fixed so the kernel's built-in command
 # line can always find the root filesystem (root=PARTUUID=...).
