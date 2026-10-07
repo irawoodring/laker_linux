@@ -7,32 +7,21 @@
 #   scripts/build.sh kernel     # just one stage: fetch|kernel|busybox|rootfs|image
 #
 # Every stage is a plain shell function below -- read them, they're short.
+# Shared settings, and the code that applies patches/, are in common.sh.
 # Nothing here needs root: the disk image is assembled from ordinary files.
 
 set -euo pipefail
 
-LAKER_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-source "$LAKER_DIR/config/versions.sh"
-
-BUILD_DIR="${BUILD_DIR:-$LAKER_DIR/build}"
-OUT_DIR="${OUT_DIR:-$LAKER_DIR/out}"
-DL_DIR="$BUILD_DIR/downloads"
-SRC_DIR="$BUILD_DIR/src"
-ROOTFS="$BUILD_DIR/rootfs"
-JOBS="${JOBS:-$(nproc)}"
-
-KERNEL_SRC="$SRC_DIR/linux-$KERNEL_VERSION"
-BUSYBOX_SRC="$SRC_DIR/busybox-$BUSYBOX_VERSION"
+source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
 # LakerLinux targets x86_64. On other hosts (e.g. Apple Silicon) cross-compile.
 if [ "$(uname -m)" != x86_64 ]; then
     export CROSS_COMPILE="${CROSS_COMPILE:-x86_64-linux-gnu-}"
 fi
-KMAKE=(make -C "$KERNEL_SRC" ARCH=x86_64 -j"$JOBS")
+# LOCALVERSION= (set, but empty) stops the kernel adding a "+" to its version
+# because the source tree has commits since the release.
+KMAKE=(make -C "$KERNEL_SRC" ARCH=x86_64 LOCALVERSION= -j"$JOBS")
 BBMAKE=(make -C "$BUSYBOX_SRC" -j"$JOBS")
-
-log() { printf '\n\033[1;34m==> %s\033[0m\n' "$*"; }
-die() { printf '\033[1;31mERROR: %s\033[0m\n' "$*" >&2; exit 1; }
 
 # Run a command as "root" without being root, so files land in the image
 # owned by uid 0. Inside Docker we usually are root already.
@@ -53,15 +42,19 @@ fetch_one() {
     log "Extracting $(basename "$tarball")"
     tar -xf "$tarball" -C "$SRC_DIR"
     [ -d "$dest" ] || die "expected $dest after extracting $tarball"
+    init_source_git "$dest"
 }
 
 stage_fetch() {
     fetch_one "$KERNEL_URL" "$KERNEL_SRC"
     fetch_one "$BUSYBOX_URL" "$BUSYBOX_SRC"
+    sync_patches kernel
+    sync_patches busybox
 }
 
 stage_kernel() {
     fetch_one "$KERNEL_URL" "$KERNEL_SRC"
+    sync_patches kernel
     log "Configuring Linux $KERNEL_VERSION"
     "${KMAKE[@]}" x86_64_defconfig
     # Layer our options on top of the defaults.
@@ -79,6 +72,7 @@ stage_kernel() {
 
 stage_busybox() {
     fetch_one "$BUSYBOX_URL" "$BUSYBOX_SRC"
+    sync_patches busybox
     log "Configuring BusyBox $BUSYBOX_VERSION"
     "${BBMAKE[@]}" defconfig
     # Static binary: no shared libraries needed in the image.

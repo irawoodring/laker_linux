@@ -2,6 +2,9 @@
 # Add an option here, then run `./laker build kernel` to rebuild.
 
 CONFIG_LOCALVERSION="-laker"
+# The source tree is a git repo (see patches/README.md); don't append a
+# commit ID to the version.
+# CONFIG_LOCALVERSION_AUTO is not set
 CONFIG_DEFAULT_HOSTNAME="lakerlinux"
 
 # Expose the running config at /proc/config.gz -- handy for exploring.

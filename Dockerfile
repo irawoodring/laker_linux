@@ -8,6 +8,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         curl ca-certificates xz-utils bzip2 python3 \
         e2fsprogs dosfstools mtools fdisk fakeroot \
         qemu-system-x86 ovmf \
+        git patch vim nano less \
     && if [ "$(dpkg --print-architecture)" != amd64 ]; then \
         apt-get install -y --no-install-recommends gcc-x86-64-linux-gnu libc6-dev-amd64-cross; \
     fi \

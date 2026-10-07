@@ -15,6 +15,7 @@ Everything else is up to you.
 - [What's in this repository](#whats-in-this-repository)
 - [Where everything comes from](#where-everything-comes-from)
 - [How the build works](#how-the-build-works)
+- [Changing the kernel or BusyBox source](#changing-the-kernel-or-busybox-source)
 - [The root filesystem and `rootfs-overlay/`](#the-root-filesystem-and-rootfs-overlay)
 - [How it boots](#how-it-boots)
 - [Why there's no initramfs](#why-theres-no-initramfs)
@@ -54,11 +55,14 @@ LAKER_NATIVE=1 ./laker run
 ## What's in this repository
 
 ```
-laker                 the front door: build / run / shell / clean
+laker                 the front door: build / run / shell / diff / reset / clean
 Dockerfile            the build environment (compilers, QEMU, disk tools)
 config/
   versions.sh         kernel and BusyBox versions, download URLs, disk layout
   kernel.fragment     kernel options, applied on top of the x86_64 defaults
+patches/              your changes to the kernel and BusyBox source
+  kernel/             *.patch files applied to the kernel, in name order
+  busybox/            *.patch files applied to BusyBox
 rootfs-overlay/       files copied onto the root filesystem as-is
   etc/inittab         what init (PID 1) starts
   etc/init.d/rcS      the boot script
@@ -68,13 +72,15 @@ rootfs-overlay/       files copied onto the root filesystem as-is
 scripts/
   build.sh            the whole build, in five readable stages
   run.sh              boots the image in QEMU
+  source.sh           ./laker diff and ./laker reset
+  common.sh           settings shared by the scripts, and the patch handling
 build/                (generated, native builds only) sources and intermediate files
 out/                  (generated) lakerlinux.img and bzImage
 ```
 
-The repository holds only *our* files: configuration, scripts, and the
+The repository holds only *our* files: configuration, scripts, patches, and the
 overlay. The kernel and BusyBox sources are downloaded during the build and
-never committed.
+never committed. Changes to them are kept in `patches/`.
 
 ## Where everything comes from
 
@@ -83,6 +89,7 @@ never committed.
 | Linux kernel source | The official release tarball from [kernel.org](https://www.kernel.org): `cdn.kernel.org/pub/linux/kernel/v6.x/linux-<version>.tar.xz` | `config/versions.sh` (`KERNEL_VERSION`, `KERNEL_URL`) |
 | BusyBox source | The official release tarball from [busybox.net](https://busybox.net/downloads/): `busybox-<version>.tar.bz2` | `config/versions.sh` (`BUSYBOX_VERSION`, `BUSYBOX_URL`) |
 | Compilers, `make`, disk tools, QEMU, UEFI firmware | Ubuntu 24.04 packages, installed into the Docker image by `Dockerfile` (or by you, for a native build) | `Dockerfile` |
+| Changes to the kernel and BusyBox source | This repository: `patches/kernel/` and `patches/busybox/` | |
 | DHCP client script | BusyBox's own example, `examples/udhcp/simple.script`, copied into the overlay | `rootfs-overlay/usr/share/udhcpc/default.script` |
 | Everything else in the image | This repository: `rootfs-overlay/`, plus a few files the build writes (see below) | |
 
@@ -111,16 +118,19 @@ it. The script runs five stages in order. You can also run any subset, e.g.
 `./laker build rootfs image`.
 
 1. **fetch**: download and unpack the kernel and BusyBox sources, if they
-   aren't already there.
+   aren't already there, and apply `patches/` (see
+   [Changing the kernel or BusyBox source](#changing-the-kernel-or-busybox-source)).
 2. **kernel**: configure and compile Linux.
+   - Bring the source up to date with `patches/kernel/`.
    - `make x86_64_defconfig` starts from the kernel's standard x86_64 defaults.
    - `scripts/kconfig/merge_config.sh` layers `config/kernel.fragment` on top.
    - The build also adds `CONFIG_CMDLINE`, the built-in kernel command line (see
      [How it boots](#how-it-boots)).
    - `make olddefconfig` fills in anything that depends on those choices.
    - `make bzImage` builds the compressed kernel, which is copied to `out/bzImage`.
-3. **busybox**: configure and compile BusyBox. It starts from BusyBox's
-   `defconfig` (nearly every command enabled), then:
+3. **busybox**: bring the source up to date with `patches/busybox/`, then
+   configure and compile BusyBox. It starts from BusyBox's `defconfig`
+   (nearly every command enabled), then:
    - turns on `CONFIG_STATIC`, so the binary needs no shared libraries;
    - turns off `tc`, which doesn't compile against current kernel headers.
 4. **rootfs**: assemble the root filesystem as a plain directory (see the next
@@ -158,8 +168,8 @@ Inside the build directory:
 
 ```
 downloads/              cached source tarballs
-src/linux-6.18.44/      the kernel source tree (and its .config)
-src/busybox-1.36.1/     the BusyBox source tree (and its .config)
+src/linux-6.18.44/      the kernel source tree (with its .config, and a .git that tracks your edits)
+src/busybox-1.36.1/     the BusyBox source tree (likewise)
 kernel.fragment         the fragment as actually applied, with CONFIG_CMDLINE added
 rootfs/                 the root filesystem, as a directory
 esp.img, root.img       the two filesystem images, before they go into the disk image
@@ -168,6 +178,90 @@ esp.img, root.img       the two filesystem images, before they go into the disk 
 To look around in the Docker volume, run `./laker shell` and `cd /build`. The
 kernel tree lives in a volume rather than in this repository because it's large,
 and because macOS's case-insensitive filesystem can't hold it.
+
+## Changing the kernel or BusyBox source
+
+You can change any file in the kernel or BusyBox source. The build compiles
+whatever is in the source tree, and never overwrites your edits.
+
+### The workflow
+
+```sh
+./laker shell                                 # a shell in the build container
+cd /build/src/linux-6.18.44
+vim init/main.c                               # or nano; make your change
+exit
+
+./laker build kernel image                    # recompiles only what you changed
+./laker run                                   # try it
+
+./laker diff kernel                           # review your edits
+./laker diff kernel hello-message             # save them as a patch
+git add patches && git commit -m "Say hello at boot"
+```
+
+For a first experiment, in `init/main.c` find this line:
+
+```c
+	pr_notice("%s", linux_banner);
+```
+
+Add this line right after it:
+
+```c
+	pr_notice("Hello from the LakerLinux kernel!\n");
+```
+
+Rebuild and boot. Your message appears in the boot output and in `dmesg`.
+
+BusyBox works the same way. Its source is in `/build/src/busybox-1.36.1`, and you
+use `./laker build busybox rootfs image` and `./laker diff busybox <name>`.
+
+### Why save edits as patches?
+
+Until you save them, your edits exist only in the build directory (for Docker,
+that's the `lakerlinux-build` volume). They're lost if you run `./laker clean` or
+change `KERNEL_VERSION`, and nobody else can see them.
+
+`./laker diff kernel <name>` saves your edits as a numbered patch file, such as
+`patches/kernel/0001-hello-message.patch`. Commit it to git, and:
+
+- every build, on any machine, applies it automatically after unpacking the source;
+- it shows up in pull requests, so others can review the change;
+- it survives `./laker clean` and kernel upgrades (if it still applies).
+
+This is how distributions maintain their changes to upstream software.
+
+Each `./laker diff kernel <name>` saves only the changes made since the last
+saved patch, so you build up a series: `0001-...`, `0002-...`, and so on. The
+text at the top of a patch file, above the first `diff --git` line, is a
+description for people to read. Edit it to explain the change.
+
+### Commands
+
+| Command | What it does |
+|---|---|
+| `./laker diff` | Lists the files you've changed (and not saved) in each source tree |
+| `./laker diff kernel` | Shows those changes in full (`busybox` works too) |
+| `./laker diff kernel <name>` | Saves them as the next numbered patch in `patches/kernel/` |
+| `./laker reset kernel` | Throws away unsaved changes, back to upstream plus your patches |
+
+### How it works
+
+When the build unpacks a release tarball, it turns the source tree into a
+small git repository. It commits the pristine source and tags it `upstream`.
+That takes a minute or two the first time for the kernel, and about 600 MB of
+disk. Each patch in `patches/kernel/` is then applied on top as its own commit.
+
+On every build, the kernel and busybox stages compare `patches/` with the patches
+already applied to the source. If they differ (you pulled a new patch, deleted
+one, or edited one), the build resets the source to `upstream` and applies all of
+`patches/` again, in name order.
+
+The build won't do that over unsaved edits. Instead it stops and asks you to save
+them (`./laker diff`) or throw them away (`./laker reset`). The trees' own
+`.gitignore` files keep compiled files out of all of this, so `./laker diff`
+shows only real source changes.
 
 ## The root filesystem and `rootfs-overlay/`
 
@@ -365,8 +459,9 @@ more.
 |--------------------------------|---------------------------------------|
 | something in `rootfs-overlay/` | `./laker build rootfs image`          |
 | `config/kernel.fragment`       | `./laker build kernel image`          |
-| kernel source code             | `./laker build kernel image`          |
-| BusyBox config/source          | `./laker build busybox rootfs image`  |
+| kernel source code             | `./laker build kernel image`, then `./laker diff kernel <name>` to keep it |
+| BusyBox config or source       | `./laker build busybox rootfs image`  |
+| a file in `patches/`           | `./laker build` (the stages re-apply all patches) |
 | a version in `config/versions.sh` | `./laker build`                    |
 | anything, and want to be sure  | `./laker build`                       |
 
@@ -374,8 +469,9 @@ more.
 UEFI firmware. It's faster, and handy when you're iterating on the kernel.
 
 `./laker shell` opens a shell inside the build container. The sources live in
-`/build/src` there, for running `make menuconfig` (to explore) and other tools by
-hand.
+`/build/src` there. The container has `vim`, `nano`, `git` and `less` for
+editing and exploring the source, and `make menuconfig` for browsing kernel
+options.
 
 ## Where to take it next
 
@@ -393,7 +489,9 @@ Ideas for student projects, roughly in order of difficulty:
   `laker-pkg install` command to unpack it into the image.
 - **Verify the downloads.** Have the fetch stage check kernel.org's published
   checksums (or PGP signatures) before unpacking anything.
-- **Kernel hacking.** Write a "hello world" kernel module. Teach the build to
+- **Kernel hacking.** Start with the hello message in
+  [Changing the kernel or BusyBox source](#changing-the-kernel-or-busybox-source).
+  Write a "hello world" kernel module. Teach the build to
   compile and install modules into `/lib/modules`. Add a `/proc` file. Add a
   system call and a userspace program that calls it.
 - **An initramfs.** See [Why there's no initramfs](#why-theres-no-initramfs).
@@ -417,4 +515,12 @@ Ideas for student projects, roughly in order of difficulty:
   time. Put kernel options in `config/kernel.fragment` instead.
 - **My changes inside LakerLinux disappeared.** The image is rebuilt from
   `rootfs-overlay/` each time. Put files there instead.
+- **"patches/kernel/ changed, but the kernel source has unsaved edits".** A
+  patch was added, removed or changed (often by a `git pull`) while you had
+  edits in progress. Save your edits with `./laker diff kernel <name>`, or
+  throw them away with `./laker reset kernel`, then build again.
+- **"patches/kernel/NNNN-name.patch doesn't apply".** The patch was made
+  for different source: another kernel version, or before an earlier patch
+  changed the same lines. Fix the patch, or remove it to build without it.
 - **Start over.** `./laker clean` deletes everything except downloaded tarballs.
+  Saved patches are safe: they're in `patches/`.
