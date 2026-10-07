@@ -7,16 +7,19 @@ operating system goes together: the kernel, the boot process, init, the
 shell, and the build tools that tie it all together.
 
 It starts out deliberately small: a Linux kernel, the
-[GNU C library](https://www.gnu.org/software/libc/) (glibc), and
+[GNU C library](https://www.gnu.org/software/libc/) (glibc),
 [BusyBox](https://busybox.net) (one program that provides `sh`, `ls`, `mount`,
-`vi`, `ip`, and ~300 other commands), packed into a disk image that boots in QEMU
-or on a real PC. Everything else is up to you.
+`vi`, `ip`, and ~300 other commands), a C compiler
+([TCC](https://bellard.org/tcc/)) and [GNU make](https://www.gnu.org/software/make/),
+packed into a disk image that boots in QEMU or on a real PC. You can write and
+compile C programs inside LakerLinux itself. Everything else is up to you.
 
 - [Quick start](#quick-start)
 - [What's in this repository](#whats-in-this-repository)
 - [Where everything comes from](#where-everything-comes-from)
 - [How the build works](#how-the-build-works)
 - [The C library: glibc](#the-c-library-glibc)
+- [The compiler: TCC and GNU make](#the-compiler-tcc-and-gnu-make)
 - [Changing the kernel or BusyBox source](#changing-the-kernel-or-busybox-source)
 - [The root filesystem and `rootfs-overlay/`](#the-root-filesystem-and-rootfs-overlay)
 - [How it boots](#how-it-boots)
@@ -60,12 +63,12 @@ LAKER_NATIVE=1 ./laker run
 laker                 the front door: build / run / shell / diff / reset / clean
 Dockerfile            the build environment (compilers, QEMU, disk tools)
 config/
-  versions.sh         kernel, glibc and BusyBox versions, download URLs, disk layout
+  versions.sh         package versions, download URLs, disk layout
   kernel.fragment     kernel options, applied on top of the x86_64 defaults
-patches/              your changes to the kernel, glibc and BusyBox source
+patches/              changes to the source of each component
   kernel/             *.patch files applied to the kernel, in name order
-  glibc/              *.patch files applied to glibc
-  busybox/            *.patch files applied to BusyBox
+  glibc/, busybox/, tcc/, make/
+                      ...to glibc, BusyBox, TCC and make
 rootfs-overlay/       files copied onto the root filesystem as-is
   etc/inittab         what init (PID 1) starts
   etc/init.d/rcS      the boot script
@@ -73,7 +76,7 @@ rootfs-overlay/       files copied onto the root filesystem as-is
   etc/passwd, ...     users, hostname, shell profile, login banner
   usr/share/udhcpc/   the script that applies DHCP settings
 scripts/
-  build.sh            the whole build, in six readable stages
+  build.sh            the whole build, in seven readable stages
   run.sh              boots the image in QEMU
   source.sh           ./laker diff and ./laker reset
   common.sh           settings shared by the scripts, and the patch handling
@@ -82,8 +85,8 @@ out/                  (generated) lakerlinux.img and bzImage
 ```
 
 The repository holds only *our* files: configuration, scripts, patches, and the
-overlay. The kernel, glibc and BusyBox sources are downloaded during the build
-and never committed. Changes to them are kept in `patches/`.
+overlay. The sources of the kernel, glibc, BusyBox, TCC and make are
+downloaded during the build and never committed. Changes to them are kept in `patches/`.
 
 ## Where everything comes from
 
@@ -91,14 +94,18 @@ and never committed. Changes to them are kept in `patches/`.
 |---|---|---|
 | Linux kernel source | The official release tarball from [kernel.org](https://www.kernel.org): `cdn.kernel.org/pub/linux/kernel/v6.x/linux-<version>.tar.xz` | `config/versions.sh` (`KERNEL_VERSION`, `KERNEL_URL`) |
 | glibc source | The official release tarball from the [GNU project](https://ftp.gnu.org/gnu/glibc/): `glibc-<version>.tar.xz` | `config/versions.sh` (`GLIBC_VERSION`, `GLIBC_URL`) |
+| TCC source | A pinned commit of TCC's development branch ("mob"), as a tarball from [its GitHub mirror](https://github.com/TinyCC/tinycc) | `config/versions.sh` (`TCC_COMMIT`, `TCC_URL`) |
+| GNU make source | The release tarball from the [GNU project](https://ftp.gnu.org/gnu/make/) | `config/versions.sh` (`MAKE_VERSION`, `MAKE_URL`) |
 | BusyBox source | The official release tarball from [busybox.net](https://busybox.net/downloads/): `busybox-<version>.tar.bz2` | `config/versions.sh` (`BUSYBOX_VERSION`, `BUSYBOX_URL`) |
 | Compilers, `make`, disk tools, QEMU, UEFI firmware | Ubuntu 24.04 packages, installed into the Docker image by `Dockerfile` (or by you, for a native build) | `Dockerfile` |
-| Changes to the kernel, glibc and BusyBox source | This repository: `patches/kernel/`, `patches/glibc/` and `patches/busybox/` | |
+| Changes to any of that source | This repository: `patches/<component>/` | |
 | DHCP client script | BusyBox's own example, `examples/udhcp/simple.script`, copied into the overlay | `rootfs-overlay/usr/share/udhcpc/default.script` |
 | Everything else in the image | This repository: `rootfs-overlay/`, plus a few files the build writes (see below) | |
 
 The versions are pinned: currently **Linux 6.18.44** (a long-term-support
-series), **glibc 2.42** and **BusyBox 1.36.1**. To upgrade, change the version in
+series), **glibc 2.42**, **BusyBox 1.36.1**, **make 4.4.1**, and TCC commit
+`43c7708` (October 2026). TCC's last formal release, 0.9.27, is from 2017 and
+can't handle today's glibc headers; development carries on in the "mob" branch. To upgrade, change the version in
 `config/versions.sh` and run `./laker build`. The build downloads anything it
 doesn't already have.
 
@@ -119,11 +126,10 @@ below), so they're fetched once. `./laker clean` keeps them.
 
 `./laker build` runs `scripts/build.sh`. Under Docker, it runs inside a
 container built from `Dockerfile`, which `./laker` builds the first time you use
-it. The script runs six stages in order. You can also run any subset, e.g.
+it. The script runs seven stages in order. You can also run any subset, e.g.
 `./laker build rootfs image`.
 
-1. **fetch**: download and unpack the kernel, glibc and BusyBox sources, if
-   they aren't already there, and apply `patches/` (see
+1. **fetch**: download and unpack all the sources, if they aren't already there, and apply `patches/` (see
    [Changing the kernel or BusyBox source](#changing-the-kernel-or-busybox-source)).
 2. **kernel**: configure and compile Linux.
    - Bring the source up to date with `patches/kernel/`.
@@ -140,19 +146,21 @@ it. The script runs six stages in order. You can also run any subset, e.g.
    - `configure` sets up a build folder outside the source tree (glibc
      requires that). This only happens the first time.
    - `make`, then `make install DESTDIR=<sysroot>`.
-4. **busybox**: bring the source up to date with `patches/busybox/`, then
+4. **tcc**: build TCC and GNU make to run inside LakerLinux (see
+   [The compiler](#the-compiler-tcc-and-gnu-make)).
+5. **busybox**: bring the source up to date with `patches/busybox/`, then
    configure and compile BusyBox. It starts from BusyBox's `defconfig`
    (nearly every command enabled), then:
    - points it at the sysroot (`CONFIG_SYSROOT`), so it links against our glibc
      instead of the build container's C library;
    - turns off `tc`, which doesn't compile against current kernel headers.
-5. **rootfs**: assemble the root filesystem as a plain directory (see
+6. **rootfs**: assemble the root filesystem as a plain directory (see
    [The root filesystem](#the-root-filesystem-and-rootfs-overlay)).
-6. **image**: pack the kernel and that directory into `out/lakerlinux.img`.
+7. **image**: pack the kernel and that directory into `out/lakerlinux.img`.
    - Format a FAT filesystem image and copy the kernel into it as
      `EFI/BOOT/BOOTX64.EFI` (`mkfs.vfat`, `mmd`, `mcopy`).
    - Format an ext4 image straight from the rootfs directory (`mke2fs -d`).
-   - Write a GPT partition table into an empty 512 MB file (`sfdisk`), then copy
+   - Write a GPT partition table into an empty 1 GB file (`sfdisk`), then copy
      each filesystem image into its partition (`dd`).
 
    None of this needs root or loop devices, because it only ever works on
@@ -184,6 +192,10 @@ downloads/              cached source tarballs
 src/linux-6.18.44/      the kernel source tree (with its .config, and a .git that tracks your edits)
 src/glibc-2.42/         the glibc source tree (likewise)
 src/busybox-1.36.1/     the BusyBox source tree (likewise)
+src/tinycc-<commit>/, src/make-4.4.1/
+                        the TCC and make source trees (likewise)
+tcc-build/, make-build/ where TCC and make are compiled
+devtools/               TCC and make, installed, before they go into the image
 glibc-build-2.42/       where glibc is compiled (glibc doesn't build inside its source tree)
 kernel-headers/         the kernel's headers, staged before they're copied into the sysroot
 sysroot/                glibc and the kernel headers, for compiling programs for LakerLinux
@@ -229,9 +241,10 @@ container's own. BusyBox is built this way.
 
 ### What goes into the image
 
-The rootfs stage copies only what programs need at run time: the files in
-`sysroot/usr/lib` named `*.so.*`, with debug information stripped (about 75 MB
-down to 5 MB). It also adds one symlink:
+The rootfs stage copies the whole sysroot into the image: the shared libraries
+that programs need to run, and the headers, start-up files (`crt1.o` and
+friends) and link libraries that a compiler needs. Debug information is
+stripped. It also adds one symlink:
 
 ```
 /lib64/ld-linux-x86-64.so.2 -> ../usr/lib/ld-linux-x86-64.so.2
@@ -244,23 +257,90 @@ BusyBox is now one of those programs. Because it's also `init`, the system
 can't start without glibc: if the loader or `libc.so.6` were missing, the kernel
 would stop with `Kernel panic - not syncing: No working init found`.
 
-### Compiling your own programs
+### Running the loader yourself
 
-In `./laker shell`, compile with the cross-compiler and the sysroot, then put the
-program in `rootfs-overlay/`. The repository is mounted at `/lakerlinux` in the
-container.
+Inside LakerLinux:
 
-```c
-// hello.c
-#include <stdio.h>
-#include <gnu/libc-version.h>
-
-int main(void)
-{
-    printf("Hello from glibc %s!\n", gnu_get_libc_version());
-    return 0;
-}
+```sh
+/lib64/ld-linux-x86-64.so.2 --list /bin/busybox   # which libraries it loads, from where
+/usr/lib/libc.so.6                                # glibc prints its own version
 ```
+
+There's no `ldd` command: glibc's `ldd` is a bash script, and LakerLinux has no
+bash. Running the loader with `--list` does the same job.
+
+## The compiler: TCC and GNU make
+
+LakerLinux ships the [Tiny C Compiler](https://bellard.org/tcc/) (TCC), written
+by Fabrice Bellard (also the author of QEMU and FFmpeg). It's a complete C
+compiler, assembler and linker in one small program: around 30,000 lines of C,
+small enough to read. It compiles very quickly, at the cost of producing slower
+code than GCC.
+
+| Command | What it is |
+|---|---|
+| `tcc` | The compiler. `cc` is a link to it, so Makefiles that use the default `$(CC)` work |
+| `tcc -run file.c` | Compiles a C file in memory and runs it straight away, like a script |
+| `make` | [GNU make](https://www.gnu.org/software/make/) 4.4.1 |
+| `/usr/src/tinycc` | TCC's own source code |
+
+TCC handles C (C99 and most of C11), not C++.
+
+### Compiling inside LakerLinux
+
+```sh
+cat > hello.c <<'END'
+#include <stdio.h>
+int main(void) { printf("Hello from LakerLinux!\n"); return 0; }
+END
+tcc -o hello hello.c && ./hello
+tcc -run hello.c               # or compile and run in one step
+```
+
+A C file can even start with `#!/usr/bin/tcc -run` and be made executable,
+so you can use C like a scripting language.
+
+### TCC compiles itself
+
+TCC's source is in `/usr/src/tinycc`, so you can build a new TCC with the one
+you have, the classic test of a compiler:
+
+```sh
+cd /usr/src/tinycc
+./configure --cc=tcc --prefix=/usr --crtprefix=/usr/lib \
+    --libpaths='{B}:/usr/lib' --sysincludepaths='{B}/include:/usr/include'
+make
+./tcc -v
+```
+
+That compiles the whole compiler in about 6 seconds, even when QEMU is
+emulating the CPU (a fraction of a second with KVM). Change something, rebuild
+it, and use your own compiler. (`./tcc -B. -run hello.c` tries the new one
+without installing it.)
+
+### How it's built
+
+TCC and make are compiled in the build container and copied into the image.
+They're built with the container's x86_64 compiler, `x86_64-linux-gnu-gcc`,
+pointed at the sysroot (`--sysroot`) so they link against LakerLinux's glibc,
+not Ubuntu's:
+
+- **TCC** has its own `configure` script. `--cross-prefix=x86_64-linux-gnu-`
+  chooses the compiler, and `--crtprefix`, `--libpaths`, `--sysincludepaths`
+  and `--elfinterp` tell the new TCC where to find headers, libraries and the
+  dynamic loader inside LakerLinux. TCC also has a small runtime library,
+  `libtcc1.a`, that it normally compiles with the `tcc` it just built. That
+  `tcc` runs on LakerLinux, not in the container, so the build uses
+  `x86_64-libtcc1-usegcc=yes` to compile it with the container's compiler too.
+- **make** uses autoconf's `configure`. It's told it's building for
+  `x86_64-laker-linux-gnu`: a different name from the build container's own
+  (`x86_64-pc-linux-gnu`), so configure knows it's cross-compiling and doesn't
+  try to run the test programs it compiles.
+
+### Compiling from the build container
+
+You can also compile programs for LakerLinux without booting it, in
+`./laker shell`:
 
 ```sh
 ./laker shell
@@ -271,19 +351,9 @@ exit
 ./laker build rootfs image && ./laker run
 ```
 
-Then, inside LakerLinux:
-
-```sh
-hello                                                    # Hello from glibc 2.42!
-/lib64/ld-linux-x86-64.so.2 --list /usr/local/bin/hello  # which libraries it loads
-/usr/lib/libc.so.6                                       # glibc prints its own version
-```
-
-There's no `ldd` command: glibc's `ldd` is a bash script, and LakerLinux has no
-bash. Running the loader with `--list` does the same job.
-
-Use `x86_64-linux-gnu-gcc`, not plain `gcc`. On an Intel/AMD machine they're the
-same compiler, but on Apple Silicon only `x86_64-linux-gnu-gcc` builds x86_64 code.
+Use `x86_64-linux-gnu-gcc`, not plain `gcc`: on Apple Silicon only the former
+builds x86_64 code. The repository is mounted at `/lakerlinux` in the
+container, so the program lands in `rootfs-overlay/` and goes into the image.
 
 ## Changing the kernel or BusyBox source
 
@@ -327,6 +397,9 @@ So does glibc: its source is in `/build/src/glibc-2.42`. After changing it, run
 `./laker build glibc busybox rootfs image` (BusyBox is relinked against the new
 library), and save your changes with `./laker diff glibc <name>`.
 
+TCC and make work the same way too: `./laker diff tcc` and `./laker diff make`.
+After changing them, run `./laker build tcc rootfs image`.
+
 ### Why save edits as patches?
 
 Until you save them, your edits exist only in the build directory (for Docker,
@@ -352,7 +425,7 @@ description for people to read. Edit it to explain the change.
 | Command | What it does |
 |---|---|
 | `./laker diff` | Lists the files you've changed (and not saved) in each source tree |
-| `./laker diff kernel` | Shows those changes in full (`glibc` and `busybox` work too) |
+| `./laker diff kernel` | Shows those changes in full (any component works: `glibc`, `busybox`, `tcc`, ...) |
 | `./laker diff kernel <name>` | Saves them as the next numbered patch in `patches/kernel/` |
 | `./laker reset kernel` | Throws away unsaved changes, back to upstream plus your patches |
 
@@ -363,7 +436,7 @@ small git repository. It commits the pristine source and tags it `upstream`.
 That takes a minute or two the first time for the kernel, and about 600 MB of
 disk. Each patch in `patches/kernel/` is then applied on top as its own commit.
 
-On every build, the kernel, glibc and busybox stages compare `patches/` with the patches
+On every build, each stage compares `patches/` with the patches
 already applied to the source. If they differ (you pulled a new patch, deleted
 one, or edited one), the build resets the source to `upstream` and applies all of
 `patches/` again, in name order.
@@ -376,7 +449,7 @@ shows only real source changes.
 ## The root filesystem and `rootfs-overlay/`
 
 The rootfs stage builds the root filesystem (everything you see under `/` when
-LakerLinux is running) in four layers:
+LakerLinux is running) in five layers:
 
 1. **Empty directories**: `/dev`, `/proc`, `/sys`, `/run`, `/tmp`, `/root`,
    `/home`, `/mnt`, `/var/log`, `/etc`.
@@ -384,9 +457,12 @@ LakerLinux is running) in four layers:
    creates a symlink for each command it provides: `/bin/ls`, `/bin/sh`,
    `/sbin/init`, `/usr/bin/vi`, and so on. When you run `ls`, BusyBox looks at the
    name it was called by and acts like `ls`.
-3. **glibc**: the shared libraries in `/usr/lib`, and the dynamic loader's
-   `/lib64` link (see [The C library: glibc](#the-c-library-glibc)).
-4. **The overlay**: everything in `rootfs-overlay/` is copied on top, keeping
+3. **glibc**: the libraries and headers in `/usr/lib` and `/usr/include`, and
+   the dynamic loader's `/lib64` link (see
+   [The C library: glibc](#the-c-library-glibc)).
+4. **TCC and make**, plus TCC's source in `/usr/src/tinycc` (see
+   [The compiler](#the-compiler-tcc-and-gnu-make)).
+5. **The overlay**: everything in `rootfs-overlay/` is copied on top, keeping
    the same paths. `rootfs-overlay/etc/inittab` becomes `/etc/inittab`, and a file
    you add at `rootfs-overlay/usr/local/bin/hello` shows up as
    `/usr/local/bin/hello`.
@@ -412,8 +488,8 @@ What the overlay contains:
 | `etc/issue`, `etc/motd` | Text shown before and after login |
 | `usr/share/udhcpc/default.script` | Called by the DHCP client to set the IP address, route, and `/etc/resolv.conf` |
 
-The result is about 6 MB: 5 MB of glibc libraries, plus BusyBox and the
-overlay.
+Finally, debug information is stripped from every program and library. The
+result is about 45 MB, most of it glibc's headers and libraries.
 
 **File ownership.** Every file in the image is owned by root (uid 0). Docker
 builds run as root. Native builds wrap `mke2fs` in `fakeroot`, which makes your
@@ -450,7 +526,7 @@ UEFI firmware                 reads the GPT partition table, finds the FAT
       -> getty -> login -> sh
 ```
 
-The disk image (`out/lakerlinux.img`, 512 MB) has two partitions:
+The disk image (`out/lakerlinux.img`, 1 GB) has two partitions:
 
 | # | Type | Size  | Contents |
 |---|------|-------|----------|
@@ -574,6 +650,7 @@ more.
 | kernel source code             | `./laker build kernel image`, then `./laker diff kernel <name>` to keep it |
 | BusyBox config or source       | `./laker build busybox rootfs image`  |
 | glibc source                   | `./laker build glibc busybox rootfs image` |
+| TCC or make source             | `./laker build tcc rootfs image`      |
 | a program in `rootfs-overlay/` | `./laker build rootfs image`          |
 | a file in `patches/`           | `./laker build` (the stages re-apply all patches) |
 | a version in `config/versions.sh` | `./laker build`                    |
@@ -597,9 +674,11 @@ Ideas for student projects, roughly in order of difficulty:
 - **Boot scripts.** Add `/etc/init.d/S50hello`, then a service that starts at
   boot and stops cleanly at shutdown.
 - **Your first package.** Start with the hello program in
-  [Compiling your own programs](#compiling-your-own-programs), then build a
-  real tool like `lua`, `nano` (which needs ncurses: a second library to build
-  into the sysroot) or `htop`, and install it into the image.
+  [Compiling inside LakerLinux](#compiling-inside-lakerlinux), then download
+  the source of a real C program like `lua` and build it with `make CC=tcc`,
+  inside LakerLinux.
+- **Hack the compiler.** Add a warning, a new keyword or a builtin to TCC in
+  `/usr/src/tinycc`, rebuild it with itself, and try it out.
 - **A package format.** Design a tarball plus manifest format and write a
   `laker-pkg install` command to unpack it into the image.
 - **Verify the downloads.** Have the fetch stage check kernel.org's published
@@ -612,9 +691,8 @@ Ideas for student projects, roughly in order of difficulty:
 - **An initramfs.** See [Why there's no initramfs](#why-theres-no-initramfs).
 - **Replace BusyBox pieces.** Write your own `init`, your own shell, or your
   own `ls`, and swap it in for BusyBox's.
-- **A real toolchain.** Build binutils and GCC that run *on* LakerLinux, against
-  its glibc, so you can compile software inside it. This is the Linux From
-  Scratch path.
+- **A bigger toolchain.** Build binutils and GCC for LakerLinux, for C++ and
+  optimized code. This is the Linux From Scratch path.
 
 ## Troubleshooting
 

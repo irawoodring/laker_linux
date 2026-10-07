@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 #
-# Build LakerLinux: a Linux kernel, the GNU C library and a BusyBox userland,
-# packed into a bootable UEFI disk image.
+# Build LakerLinux: a Linux kernel, the GNU C library, a BusyBox userland, and
+# a C compiler (TCC) with GNU make, packed into a bootable UEFI disk image.
 #
 #   scripts/build.sh            # build everything
-#   scripts/build.sh kernel     # just one stage: fetch|kernel|glibc|busybox|rootfs|image
+#   scripts/build.sh kernel     # just one stage: fetch|kernel|glibc|tcc|busybox|rootfs|image
 #
 # Every stage is a plain shell function below -- read them, they're short.
 # Shared settings, and the code that applies patches/, are in common.sh.
@@ -40,7 +40,9 @@ fetch_one() {
         mv "$tarball.part" "$tarball"
     fi
     log "Extracting $(basename "$tarball")"
-    tar -xf "$tarball" -C "$SRC_DIR"
+    # --no-same-owner: as root (in Docker), tar would otherwise keep the file
+    # owners recorded in the tarball, i.e. its maintainers' user IDs.
+    tar -xf "$tarball" -C "$SRC_DIR" --no-same-owner
     [ -d "$dest" ] || die "expected $dest after extracting $tarball"
     init_source_git "$dest"
 }
@@ -49,9 +51,10 @@ stage_fetch() {
     fetch_one "$KERNEL_URL" "$KERNEL_SRC"
     fetch_one "$GLIBC_URL" "$GLIBC_SRC"
     fetch_one "$BUSYBOX_URL" "$BUSYBOX_SRC"
-    sync_patches kernel
-    sync_patches glibc
-    sync_patches busybox
+    fetch_one "$TCC_URL" "$TCC_SRC"
+    fetch_one "$MAKE_URL" "$MAKE_SRC"
+    local comp
+    for comp in $COMPONENTS; do sync_patches "$comp"; done
 }
 
 stage_kernel() {
@@ -115,6 +118,69 @@ stage_glibc() {
     fi
 }
 
+# A C compiler and make that run *inside* LakerLinux, cross-compiled here
+# against the glibc in the sysroot, and installed into $DEVTOOLS_ROOT (the
+# rootfs stage copies them into the image).
+stage_tcc() {
+    [ -f "$SYSROOT/usr/lib/libc.so.6" ] || die "glibc isn't built yet; run ./laker build glibc first"
+    fetch_one "$TCC_URL" "$TCC_SRC"
+    fetch_one "$MAKE_URL" "$MAKE_SRC"
+    sync_patches tcc
+    sync_patches make
+
+    # TCC: the Tiny C Compiler: compiler, assembler and linker in one program.
+    # --cross-prefix builds it with the x86_64 cross-compiler; the paths are
+    # where it will find headers and libraries inside LakerLinux. {B} is TCC's
+    # own directory (/usr/lib/tcc), where it keeps libtcc1.a and its headers.
+    # x86_64-libtcc1-usegcc=yes: compile TCC's small runtime library,
+    # libtcc1.a, with that same compiler. (Normally TCC compiles it with the
+    # tcc it just built, but that tcc runs on LakerLinux, not here.)
+    # TCC is built in a copy of its source tree (rsync refreshes it with any
+    # edits): its runtime library's Makefile only works when building in-tree.
+    local build="$BUILD_DIR/tcc-build"
+    local args=(--prefix=/usr --cpu=x86_64 --cross-prefix="$TARGET-"
+                --extra-cflags="-O2 --sysroot=$SYSROOT" --extra-ldflags="--sysroot=$SYSROOT"
+                --crtprefix=/usr/lib --libpaths='{B}:/usr/lib'
+                --sysincludepaths='{B}/include:/usr/include'
+                --elfinterp=/lib64/ld-linux-x86-64.so.2)
+    mkdir -p "$build"
+    rsync -a --exclude=.git "$TCC_SRC/" "$build/"
+    # Configure again whenever the options above change.
+    if [ ! -f "$build/config.mak" ] || [ "${args[*]}" != "$(cat "$build/.configure-args" 2>/dev/null)" ]; then
+        log "Configuring TCC"
+        (cd "$build" && ./configure "${args[@]}") > "$build/configure.log" 2>&1 ||
+            { tail -20 "$build/configure.log"; die "TCC configure failed; see $build/configure.log"; }
+        echo "${args[*]}" > "$build/.configure-args"
+    fi
+    log "Building TCC"
+    make -C "$build" -j"$JOBS" x86_64-libtcc1-usegcc=yes > "$build/make.log" 2>&1 ||
+        { tail -30 "$build/make.log"; die "TCC build failed; see $build/make.log"; }
+    make -C "$build" x86_64-libtcc1-usegcc=yes DESTDIR="$DEVTOOLS_ROOT" install > "$build/install.log" 2>&1 ||
+        { tail -20 "$build/install.log"; die "TCC install failed; see $build/install.log"; }
+    # cc is the traditional name for "the C compiler"; make uses it by default.
+    ln -sfn tcc "$DEVTOOLS_ROOT/usr/bin/cc"
+
+    # GNU make. A different vendor name in --host ("laker") than the build
+    # container's makes configure cross-compile instead of trying to run the
+    # programs it builds.
+    build="$BUILD_DIR/make-build"
+    if [ ! -f "$build/Makefile" ]; then
+        log "Configuring make $MAKE_VERSION"
+        mkdir -p "$build"
+        (cd "$build" && "$MAKE_SRC/configure" \
+            --prefix=/usr --build="$("$MAKE_SRC/build-aux/config.guess")" \
+            --host=x86_64-laker-linux-gnu --without-guile --disable-nls \
+            CC="$TARGET-gcc --sysroot=$SYSROOT" AR="$TARGET-ar" RANLIB="$TARGET-ranlib") \
+            > "$build/configure.log" 2>&1 ||
+            { tail -20 "$build/configure.log"; die "make configure failed; see $build/configure.log"; }
+    fi
+    log "Building make $MAKE_VERSION"
+    make -C "$build" -j"$JOBS" > "$build/make.log" 2>&1 ||
+        { tail -30 "$build/make.log"; die "make build failed; see $build/make.log"; }
+    make -C "$build" DESTDIR="$DEVTOOLS_ROOT" install > "$build/install.log" 2>&1 ||
+        { tail -20 "$build/install.log"; die "make install failed; see $build/install.log"; }
+}
+
 stage_busybox() {
     fetch_one "$BUSYBOX_URL" "$BUSYBOX_SRC"
     sync_patches busybox
@@ -133,6 +199,21 @@ stage_busybox() {
     "${BBMAKE[@]}"
 }
 
+# Remove debug info from every ELF file under a directory. Executables and
+# shared libraries lose their symbol tables too; object files and static
+# libraries keep theirs, because the linker needs them.
+strip_tree() {
+    local f
+    find "$1" -type f \( -perm -u+x -o -name '*.so*' -o -name '*.a' -o -name '*.o' \) -print0 |
+    while IFS= read -r -d '' f; do
+        [ "$(head -c4 "$f" 2>/dev/null | od -An -c | tr -d ' ')" = '177ELF' ] || [[ $f == *.a ]] || continue
+        case "$f" in
+            *.a|*.o) "$TARGET-strip" --strip-debug "$f" 2>/dev/null || true ;;
+            *)       "$TARGET-strip" --strip-unneeded "$f" 2>/dev/null || true ;;
+        esac
+    done
+}
+
 stage_rootfs() {
     log "Assembling root filesystem in $ROOTFS"
     rm -rf "$ROOTFS"
@@ -143,17 +224,29 @@ stage_rootfs() {
     # BusyBox installs itself as /bin/busybox plus a symlink per applet.
     "${BBMAKE[@]}" CONFIG_PREFIX="$ROOTFS" install >/dev/null
 
-    # glibc's run-time pieces: the dynamic loader and the shared libraries.
-    # Headers, static libraries and crt*.o files stay in the sysroot, since
-    # they're only needed for compiling. Stripping debug info takes this from
-    # about 75 MB to 5 MB.
-    mkdir -p "$ROOTFS/usr/lib" "$ROOTFS/lib64"
-    local lib
-    for lib in "$SYSROOT"/usr/lib/*.so.*; do
-        "$TARGET-strip" --strip-debug -o "$ROOTFS/usr/lib/$(basename "$lib")" "$lib"
-    done
+    # The sysroot: glibc (the dynamic loader and shared libraries programs
+    # need to run, plus the headers, crt*.o start-up files and link libraries
+    # that compiling needs) and the kernel's headers.
+    mkdir -p "$ROOTFS/usr" "$ROOTFS/lib64"
+    cp -a "$SYSROOT/usr/include" "$SYSROOT/usr/lib" "$ROOTFS/usr/"
     # Every x86_64 Linux program has this loader path built in.
     ln -s ../usr/lib/ld-linux-x86-64.so.2 "$ROOTFS/lib64/ld-linux-x86-64.so.2"
+
+    # TCC and make. --remove-destination replaces any BusyBox symlink with the
+    # same name instead of writing through it into /bin/busybox.
+    if [ -d "$DEVTOOLS_ROOT/usr" ]; then
+        cp -a --remove-destination "$DEVTOOLS_ROOT/usr/." "$ROOTFS/usr/"
+    fi
+    rm -rf "$ROOTFS"/usr/share/{info,man,doc}   # no man or info reader here
+
+    # TCC's own source, so you can rebuild TCC with TCC inside LakerLinux.
+    if [ -d "$TCC_SRC" ]; then
+        mkdir -p "$ROOTFS/usr/src"
+        rsync -a --exclude=.git "$TCC_SRC/" "$ROOTFS/usr/src/tinycc/"
+    fi
+
+    # Strip debugging information from programs and libraries.
+    strip_tree "$ROOTFS"
 
     # Everything students customize lives in rootfs-overlay/.
     cp -a "$LAKER_DIR/rootfs-overlay/." "$ROOTFS/"
@@ -197,19 +290,20 @@ label-id: $DISK_GUID
 start=1MiB, size=${ESP_SIZE_MB}MiB, type=uefi, name="LAKERBOOT"
 start=$((ESP_SIZE_MB + 1))MiB, size=${root_mb}MiB, type=linux, uuid=$ROOT_PARTUUID, name="lakerroot"
 EOF
-    dd if="$esp" of="$disk" bs=1M seek=1 conv=notrunc status=none
-    dd if="$root" of="$disk" bs=1M seek=$((ESP_SIZE_MB + 1)) conv=notrunc status=none
+    # conv=sparse skips all-zero blocks, so the image's empty space takes no disk.
+    dd if="$esp" of="$disk" bs=1M seek=1 conv=notrunc,sparse status=none
+    dd if="$root" of="$disk" bs=1M seek=$((ESP_SIZE_MB + 1)) conv=notrunc,sparse status=none
 
     log "Done: $disk"
     echo "Boot it with: ./laker run"
 }
 
 stages=("$@")
-[ ${#stages[@]} -eq 0 ] && stages=(fetch kernel glibc busybox rootfs image)
+[ ${#stages[@]} -eq 0 ] && stages=(fetch kernel glibc tcc busybox rootfs image)
 for s in "${stages[@]}"; do
     case "$s" in
-        fetch|kernel|glibc|busybox|rootfs|image) mkdir -p "$BUILD_DIR"; "stage_$s" ;;
-        *) die "unknown stage '$s' (expected fetch, kernel, glibc, busybox, rootfs, image)" ;;
+        fetch|kernel|glibc|tcc|busybox|rootfs|image) mkdir -p "$BUILD_DIR"; "stage_$s" ;;
+        *) die "unknown stage '$s' (expected fetch, kernel, glibc, tcc, busybox, rootfs, image)" ;;
     esac
 done
 

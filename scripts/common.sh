@@ -17,25 +17,30 @@ JOBS="${JOBS:-$(nproc)}"
 KERNEL_SRC="$SRC_DIR/linux-$KERNEL_VERSION"
 BUSYBOX_SRC="$SRC_DIR/busybox-$BUSYBOX_VERSION"
 GLIBC_SRC="$SRC_DIR/glibc-$GLIBC_VERSION"
+TCC_SRC="$SRC_DIR/tinycc-$TCC_COMMIT"
+MAKE_SRC="$SRC_DIR/make-$MAKE_VERSION"
 
 # What we build for, and where its C library lives. The sysroot holds glibc's
 # headers and libraries (plus the kernel's headers), so programs are compiled
 # against *our* glibc rather than the build machine's.
 TARGET=x86_64-linux-gnu
 SYSROOT="$BUILD_DIR/sysroot"
+DEVTOOLS_ROOT="$BUILD_DIR/devtools"    # TCC and make, before they go into the image
 
 log() { printf '\n\033[1;34m==> %s\033[0m\n' "$*"; }
 die() { printf '\033[1;31mERROR: %s\033[0m\n' "$*" >&2; exit 1; }
 
-COMPONENTS="kernel glibc busybox"
+COMPONENTS="kernel glibc busybox tcc make"
 
-# kernel|glibc|busybox -> its source directory
+# component -> its source directory
 src_dir() {
     case "$1" in
         kernel)  echo "$KERNEL_SRC" ;;
         glibc)   echo "$GLIBC_SRC" ;;
         busybox) echo "$BUSYBOX_SRC" ;;
-        *) die "unknown component '$1' (expected kernel, glibc or busybox)" ;;
+        tcc)     echo "$TCC_SRC" ;;
+        make)    echo "$MAKE_SRC" ;;
+        *) die "unknown component '$1' (expected one of: $COMPONENTS)" ;;
     esac
 }
 
@@ -49,7 +54,11 @@ src_dir() {
 #
 # The trees' own .gitignore files keep compiled output out of all of this.
 
-src_git() { git -C "$1" -c user.name=LakerLinux -c user.email=laker@localhost "${@:2}"; }
+# safe.directory: git refuses to work in a repository owned by another user,
+# which these trees can be (e.g. unpacked as root in Docker).
+src_git() {
+    git -C "$1" -c safe.directory='*' -c user.name=LakerLinux -c user.email=laker@localhost "${@:2}"
+}
 
 # Make a freshly unpacked tree a git repo, with its contents tagged `upstream`.
 init_source_git() {
