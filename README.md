@@ -1,6 +1,8 @@
 # LakerLinux
 
-![Tux in GV Gear](./resources/tux_gv.png){width=300px}
+<p align="center">
+  <img src="tux_gv.png" width="300">
+</p>
 
 A version of Linux for students to use and learn with.
 
