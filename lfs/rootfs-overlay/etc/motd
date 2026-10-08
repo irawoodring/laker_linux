@@ -1,0 +1,6 @@
+
+  Welcome to LakerLinux!
+  Built from source with Linux From Scratch 12.4: GNU coreutils, bash, GCC,
+  and about 80 other packages, each one a script in lfs/ in the repository.
+  Power off with `poweroff`.
+

@@ -31,7 +31,7 @@ fi
 
 if [ "${1:-}" = "--direct" ]; then
     args+=(-kernel "$OUT_DIR/bzImage"
-           -append "root=PARTUUID=$ROOT_PARTUUID rootwait console=ttyS0,115200")
+           -append "$KERNEL_CMDLINE")
 else
     firmware=""
     for f in /usr/share/ovmf/OVMF.fd /usr/share/OVMF/OVMF.fd /usr/share/qemu/OVMF.fd \
