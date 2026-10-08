@@ -1,6 +1,6 @@
 # LakerLinux
 
-A version of Linux for Grand Valley students to use and learn with.
+A version of Linux for students to use and learn with.
 
 It's a tiny distribution you build from source, for learning how an
 operating system goes together: the kernel, the boot process, init, the
