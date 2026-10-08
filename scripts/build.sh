@@ -256,6 +256,7 @@ stage_devtools() {
     if wants tcc; then devtools_tcc; fi
     devtools_make
     devtools_disk
+    devtools_git
 }
 
 # GCC and binutils, cross-compiled with the cross-compiler. Like chapter 6
@@ -387,6 +388,61 @@ devtools_disk() {
            "$root/usr/sbin/e2scrub" "$root/usr/sbin/e2scrub_all"
 }
 
+devtools_git() {
+    fetch_one "$ZLIB_URL" "$ZLIB_SRC";       sync_patches zlib
+    fetch_one "$OPENSSL_URL" "$OPENSSL_SRC"; sync_patches openssl
+    fetch_one "$CURL_URL" "$CURL_SRC";       sync_patches curl
+    fetch_one "$GIT_URL" "$GIT_SRC";         sync_patches git
+    local root="$DEVTOOLS_ROOT/git"
+    # The build container's compiler, aimed at LakerLinux's glibc (the sysroot).
+    local cc=(CC="$TARGET-gcc --sysroot=$SYSROOT" AR="$TARGET-ar" RANLIB="$TARGET-ranlib")
+
+    # Each library is installed twice:
+    #   into the sysroot, so the next package can link against it;
+    #   into devtools/git, so it ends up in the image.
+
+    # 1. zlib. Its configure isn't autoconf: it takes CC from the environment.
+    local zb="$BUILD_DIR/zlib-build"
+    mkdir -p "$zb"
+    [ -f "$zb/Makefile" ] || (cd "$zb" && env "${cc[@]}" "$ZLIB_SRC/configure" --prefix=/usr)
+    make -C "$zb" -j"$JOBS"
+    make -C "$zb" install DESTDIR="$SYSROOT"
+    make -C "$zb" install DESTDIR="$root"
+
+    # 2. OpenSSL. Its own Perl Configure script, told the target outright.
+    local ob="$BUILD_DIR/openssl-build"
+    mkdir -p "$ob"
+    [ -f "$ob/Makefile" ] || (cd "$ob" && env -u CROSS_COMPILE "${cc[@]}" "$OPENSSL_SRC/Configure" linux-x86_64 \
+        --prefix=/usr --openssldir=/etc/ssl --libdir=lib shared no-tests no-docs)
+    make -C "$ob" -j"$JOBS"                      # the slow one: a few minutes
+    make -C "$ob" install_sw DESTDIR="$SYSROOT"  # install_sw: skip the man pages
+    make -C "$ob" install_sw install_ssldirs DESTDIR="$root"
+
+    # 3. curl: normal autoconf, so autobuild does configure/make/install.
+    #    --without-*: optional libraries we don't have.
+    local cb="$BUILD_DIR/curl-build"
+    autobuild "curl $CURL_VERSION" "$CURL_SRC" "$cb" "DESTDIR=$SYSROOT" -- \
+        --prefix=/usr --build="$(build_triplet)" --host="$CROSS_TARGET" \
+        --with-openssl --with-ca-bundle=/etc/ssl/certs/ca-certificates.crt \
+        --disable-static --disable-ldap --disable-manual --disable-docs \
+        --without-libpsl --without-brotli --without-zstd --without-nghttp2 \
+        --without-libidn2 --without-libssh2 "${cc[@]}"
+    make -C "$cb" install DESTDIR="$root"
+
+    # 4. git. No configure step: its Makefile takes settings as variables.
+    #    NO_*: leave out the parts needing Perl, Python, Tcl/Tk, gettext,
+    #    expat, which LakerLinux doesn't have. git builds in-tree, so copy it.
+    local gb="$BUILD_DIR/git-build"
+    mkdir -p "$gb"
+    rsync -a --exclude=.git "$GIT_SRC/" "$gb/"
+    local gitmake=(make -C "$gb" prefix=/usr
+        CC="$TARGET-gcc --sysroot=$SYSROOT" AR="$TARGET-ar" uname_S=Linux uname_M=x86_64
+        NO_PERL=1 NO_PYTHON=1 NO_TCLTK=1 NO_GETTEXT=1 NO_EXPAT=1 NO_OPENSSL=1
+        CURL_LDFLAGS=-lcurl INSTALL_SYMLINKS=1)
+    "${gitmake[@]}" -j"$JOBS" all
+    "${gitmake[@]}" install DESTDIR="$root"
+}
+
 stage_busybox() {
     fetch_one "$BUSYBOX_URL" "$BUSYBOX_SRC"
     sync_patches busybox
@@ -457,13 +513,15 @@ stage_rootfs() {
     # runs gcc. --remove-destination replaces BusyBox's symlinks for the same
     # names (ar, strings, ...) instead of writing through them into
     # /bin/busybox.
-    local tools=(make disk) t
+    local tools=(make disk git) t
     if wants tcc; then tools+=(tcc); fi
     if wants gcc; then tools+=(gcc); fi
     for t in "${tools[@]}"; do
         [ -d "$DEVTOOLS_ROOT/$t/usr" ] || die "$t isn't built yet; run ./laker build devtools first"
         cp -a --remove-destination "$DEVTOOLS_ROOT/$t/usr/." "$ROOTFS/usr/"
     done
+    install -D -m 644 /etc/ssl/certs/ca-certificates.crt "$ROOTFS/etc/ssl/certs/ca-certificates.crt"
+    ln -sfn certs/ca-certificates.crt "$ROOTFS/etc/ssl/cert.pem"   # OpenSSL's default location
     rm -rf "$ROOTFS"/usr/share/{info,man,doc}   # no man or info reader here
 
     # TCC's own source, so you can rebuild TCC with TCC inside LakerLinux.

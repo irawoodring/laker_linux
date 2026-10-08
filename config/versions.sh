@@ -68,6 +68,16 @@ DISK_GUID="4c414b45-5200-4c49-4e55-580000000000"
 ROOT_PARTUUID="4c414b45-5200-4c49-4e55-580000000002"
 ROOT_FS_UUID="4c414b45-5200-4c49-4e55-580000000003"
 
+# Add git
+ZLIB_VERSION="${ZLIB_VERSION:-1.3.1}"         # zlib and OpenSSL: LFS 12.4's versions
+OPENSSL_VERSION="${OPENSSL_VERSION:-3.5.2}"
+CURL_VERSION="${CURL_VERSION:-8.15.0}"
+GIT_VERSION="${GIT_VERSION:-2.51.0}"
+ZLIB_URL="https://zlib.net/fossils/zlib-${ZLIB_VERSION}.tar.gz"
+OPENSSL_URL="https://github.com/openssl/openssl/releases/download/openssl-${OPENSSL_VERSION}/openssl-${OPENSSL_VERSION}.tar.gz"
+CURL_URL="https://curl.se/download/curl-${CURL_VERSION}.tar.xz"
+GIT_URL="https://cdn.kernel.org/pub/software/scm/git/git-${GIT_VERSION}.tar.xz"
+
 # The kernel's built-in command line (see "How it boots" in README.md).
 # No root=: the initramfs finds the root file system itself. net.ifnames=0
 # keeps the network card's traditional name, eth0, which both systems'

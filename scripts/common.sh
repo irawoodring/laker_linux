@@ -30,6 +30,12 @@ TCC_SRC="$SRC_DIR/tinycc-$TCC_COMMIT"
 UTIL_LINUX_SRC="$SRC_DIR/util-linux-$UTIL_LINUX_VERSION"
 E2FSPROGS_SRC="$SRC_DIR/e2fsprogs-$E2FSPROGS_VERSION"
 
+# Add Git
+ZLIB_SRC="$SRC_DIR/zlib-$ZLIB_VERSION"
+OPENSSL_SRC="$SRC_DIR/openssl-$OPENSSL_VERSION"
+CURL_SRC="$SRC_DIR/curl-$CURL_VERSION"
+GIT_SRC="$SRC_DIR/git-$GIT_VERSION"
+
 # What we build for, and where its C library lives. The sysroot holds glibc's
 # headers and libraries (plus the kernel's headers), so programs are compiled
 # against *our* glibc rather than the build machine's.
@@ -56,7 +62,7 @@ wants() { [ "$COMPILER" = both ] || [ "$COMPILER" = "$1" ]; }
 log() { printf '\n\033[1;34m==> %s\033[0m\n' "$*"; }
 die() { printf '\033[1;31mERROR: %s\033[0m\n' "$*" >&2; exit 1; }
 
-COMPONENTS="kernel glibc busybox binutils gcc tcc make util-linux e2fsprogs"
+COMPONENTS="kernel glibc busybox binutils gcc tcc make util-linux e2fsprogs zlib openssl curl git"
 
 # component -> its source directory
 src_dir() {
@@ -70,6 +76,10 @@ src_dir() {
         make)     echo "$MAKE_SRC" ;;
         util-linux) echo "$UTIL_LINUX_SRC" ;;
         e2fsprogs)  echo "$E2FSPROGS_SRC" ;;
+        zlib)      echo "$ZLIB_SRC" ;;
+        openssl)  echo "$OPENSSL_SRC" ;;
+        curl)     echo "$CURL_SRC" ;;
+        git)      echo "$GIT_SRC" ;;
         *) die "unknown component '$1' (expected one of: $COMPONENTS)" ;;
     esac
 }

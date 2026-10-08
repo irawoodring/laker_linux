@@ -90,6 +90,6 @@ case "$cmd" in
     reset) in_env scripts/source.sh reset "$@" ;;
     clean)
         rm -rf out
-        in_env bash -c 'b="${BUILD_DIR:-build}"; rm -rf "$b/src" "$b/rootfs" "$b"/*.img "$b/kernel.fragment" "$b/sysroot" "$b/kernel-headers" "$b"/glibc-build-* "$b"/cross* "$b"/devtools* "$b/tcc-build" "$b"/make-build-* "$b"/util-linux-build-* "$b"/e2fsprogs-build-* "$b/initramfs" "$b/lfs" "$b/lfs-done" "$b/lfs-logs"' ;;
+        in_env bash -c 'b="${BUILD_DIR:-build}"; rm -rf "$b/src" "$b/rootfs" "$b"/*.img "$b/kernel.fragment" "$b/sysroot" "$b/kernel-headers" "$b"/glibc-build-* "$b"/cross* "$b"/devtools* "$b/tcc-build" "$b"/make-build-* "$b"/util-linux-build-* "$b"/e2fsprogs-build-* "$b/initramfs" "$b/lfs" "$b/lfs-done" "$b/lfs-logs" "$b"/zlib-build "$b"/openssl-build "$b"/curl-build "$b"/git-build"';;
     *) sed -n '3,26p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
 esac
