@@ -41,22 +41,25 @@ following [Linux From Scratch](https://www.linuxfromscratch.org/lfs/view/12.4/)
 
 ## Quick start
 
-You need **Docker** and about **25 GB of disk**. Nothing else.
+You need **Docker** and about **25 GB of disk** (more for the Linux From
+Scratch system). Nothing else. Then pick one of these:
+
+| What you get | Build it | First build (4 cores) |
+|---|---|---|
+| BusyBox system with GCC (the default) | `./laker build` | About an hour, mostly GCC |
+| BusyBox system with TCC, the Tiny C Compiler | `COMPILER=tcc ./laker build` | About 20 minutes, mostly the kernel and glibc |
+| BusyBox system with both compilers | `COMPILER=both ./laker build` | About an hour |
+| Full Linux From Scratch system | `SYSTEM=lfs ./laker build` | Several hours |
+
+and boot it:
 
 ```sh
-./laker build     # first build: about an hour on 4 cores, mostly GCC
-./laker run       # boots in this terminal
+./laker run       # boots the system you built last, in this terminal
 ```
 
-For a much quicker first build (about 20 minutes, mostly the kernel and glibc), use the
-Tiny C Compiler instead of GCC:
-
-```sh
-COMPILER=tcc ./laker build
-```
-
-See [Choosing a compiler](#choosing-a-compiler). For the full Linux From Scratch
-system instead (several hours), use `SYSTEM=lfs ./laker build`.
+See [Two ways to build](#two-ways-to-build-busybox-or-linux-from-scratch) and
+[Choosing a compiler](#choosing-a-compiler) for what the options mean. To make
+one the default, set `SYSTEM` or `COMPILER` in `config/versions.sh` instead.
 
 At the `lakerlinux login:` prompt, type **`root`**. There's no password.
 Inside LakerLinux, run `poweroff` when you're done. If it gets stuck, press
@@ -67,15 +70,19 @@ to minutes.
 
 ### Without Docker (Linux only)
 
-On Debian/Ubuntu, install the toolchain once and set `LAKER_NATIVE=1`:
+For the BusyBox system on an x86_64 Debian/Ubuntu machine, install the
+toolchain once and set `LAKER_NATIVE=1`:
 
 ```sh
 sudo apt install build-essential bc bison flex libelf-dev libssl-dev cpio \
-    curl xz-utils bzip2 python3 e2fsprogs dosfstools mtools fdisk fakeroot \
+    curl xz-utils bzip2 python3 perl e2fsprogs dosfstools mtools fdisk fakeroot \
     qemu-system-x86 ovmf rsync gawk m4 texinfo
 LAKER_NATIVE=1 ./laker build
 LAKER_NATIVE=1 ./laker run
 ```
+
+The LFS system needs root (it builds chapters 7 to 9 in a chroot), so build it
+in Docker.
 
 ## Two ways to build: BusyBox or Linux From Scratch
 
@@ -522,6 +529,11 @@ links against LakerLinux's glibc:
   container's compiler too.
 - It's built in a copy of its source tree, because the Makefile for
   `libtcc1.a` only works in-tree.
+- While building, TCC compiles and runs a small helper, `c2str.exe`, that turns
+  its `include/tccdefs.h` into C source (`tccdefs_.h`). The build compiles that
+  helper first with the container's own `gcc`, so it runs on the build machine
+  whatever its CPU (Apple Silicon included), rather than being an x86_64
+  LakerLinux program.
 
 GNU make is built the same way, whichever compiler you choose.
 
@@ -1035,9 +1047,15 @@ Ideas for student projects, roughly in order of difficulty:
   default). The kernel tree has files whose names differ only in case, which
   macOS's filesystem can't store. `./laker` keeps the source in a Docker volume
   for this reason.
-- **On Apple Silicon.** The container cross-compiles for x86_64 and QEMU
-  emulates the CPU, so `./laker run` is slower than on an Intel/AMD machine.
-  (This path hasn't been tested as much as x86_64 Linux hosts yet.)
+- **On Apple Silicon.** Both systems build and run on Apple Silicon Macs.
+  The BusyBox system's build container runs natively (ARM) and cross-compiles
+  for x86_64; the LFS system's container is x86_64, emulated (see below). Either
+  way QEMU emulates the CPU, so `./laker run` is slower than on an Intel/AMD
+  machine.
+- **The TCC build fails with "rosetta error: failed to open elf at
+  /lib64/ld-linux-x86-64.so.2" (Apple Silicon).** An older version of the build
+  tried to run an x86_64 helper program (`c2str.exe`) in the ARM container.
+  Pull the latest version of this repository and build again.
 - **Compiling inside LakerLinux is slow.** Without KVM (on a Mac, or a Linux
   machine without virtualization), QEMU emulates the CPU in software. Compile
   with `./laker shell` and the cross-compiler instead (see
