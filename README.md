@@ -1,5 +1,7 @@
 # LakerLinux
 
+[Tux in GV Gear](./resources/tux_gv.png)
+
 A version of Linux for students to use and learn with.
 
 It's a tiny distribution you build from source, for learning how an
