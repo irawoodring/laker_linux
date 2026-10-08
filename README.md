@@ -1,6 +1,6 @@
 # LakerLinux
 
-[Tux in GV Gear](./resources/tux_gv.png)
+![Tux in GV Gear](./resources/tux_gv.png)
 
 A version of Linux for students to use and learn with.
 
