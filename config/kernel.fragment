@@ -22,6 +22,10 @@ CONFIG_EFI_PARTITION=y
 CONFIG_CMDLINE_BOOL=y
 # CMDLINE is filled in by scripts/build.sh from config/versions.sh.
 
+# The initramfs (initramfs/), built into the kernel. INITRAMFS_SOURCE is
+# filled in by scripts/build.sh.
+CONFIG_BLK_DEV_INITRD=y
+
 # Filesystems
 CONFIG_EXT4_FS=y
 CONFIG_VFAT_FS=y
@@ -37,6 +41,22 @@ CONFIG_BLK_DEV_NVME=y
 CONFIG_SATA_AHCI=y
 CONFIG_E1000=y
 CONFIG_E1000E=y
+
+# USB disks and keyboards, for booting from (and installing to) USB sticks
+# on real PCs.
+CONFIG_USB_SUPPORT=y
+CONFIG_USB=y
+CONFIG_USB_PCI=y
+CONFIG_USB_XHCI_HCD=y
+CONFIG_USB_XHCI_PCI=y
+CONFIG_USB_EHCI_HCD=y
+CONFIG_USB_EHCI_PCI=y
+CONFIG_USB_STORAGE=y
+CONFIG_USB_UAS=y
+CONFIG_SCSI=y
+CONFIG_BLK_DEV_SD=y
+CONFIG_HID_GENERIC=y
+CONFIG_USB_HID=y
 
 # Console on a framebuffer when booted on a real machine.
 CONFIG_DRM=y

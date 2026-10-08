@@ -2,10 +2,11 @@
 # https://www.linuxfromscratch.org/lfs/view/12.4/chapter10/fstab.html
 # Package: (none)
 #
-# LakerLinux: the root file system is found by its partition UUID, the same
-# one the kernel's built-in command line uses (config/versions.sh), so this
-# works whatever the disk is called (/dev/vda in QEMU, /dev/sda or
-# /dev/nvme0n1 on real machines). There's no swap partition.
+# LakerLinux: the root file system is found by its partition UUID
+# (config/versions.sh), so this works whatever the disk is called (/dev/vda in
+# QEMU, /dev/sda or /dev/nvme0n1 on real machines). laker-install changes it
+# to the new partition's UUID on the disks it installs to. There's no swap
+# partition.
 
 cat > /etc/fstab << EOF
 # Begin /etc/fstab

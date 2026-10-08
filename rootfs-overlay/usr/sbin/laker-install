@@ -1,0 +1,200 @@
+#!/bin/sh
+#
+# laker-install: copy the running LakerLinux onto another disk (a USB stick,
+# say), so that disk boots LakerLinux too.
+#
+#   laker-install            list the disks you could install to
+#   laker-install sdb        install to /dev/sdb (asks first: it erases it)
+#   laker-install -y sdb     ...without asking
+#
+# The new disk gets the same layout as out/lakerlinux.img (see "Installing
+# to another disk" in README.md):
+#
+#   partition 1  "LAKERBOOT"  EFI System Partition: the kernel, as
+#                             \EFI\BOOT\BOOTX64.EFI. Copied byte for byte.
+#   partition 2  "lakerroot"  ext4, filling the rest of the disk: a copy of
+#                             every file on this system's root file system.
+#
+# Nothing on the new disk is tied to this one: the kernel's initramfs finds
+# whichever partition is named "lakerroot" when it boots (and asks, if it
+# finds more than one).
+#
+# Runs on both systems (BusyBox and LFS), so it uses only plain sh and the
+# commands both have.
+
+set -eu
+
+ROOT_LABEL=lakerroot
+BOOT_LABEL=LAKERBOOT
+MOUNT_DIR=/.laker-install-target   # where the new root is mounted while copying
+
+die() { echo "laker-install: $*" >&2; exit 1; }
+
+# sysfs (/sys/class/block) describes every disk and partition the kernel
+# knows about; most of what this script needs to know comes from there.
+sys() { cat "/sys/class/block/$1/$2" 2>/dev/null || true; }
+is_partition() { [ -e "/sys/class/block/$1/partition" ]; }
+size_bytes() { echo $(( $(sys "$1" size) * 512 )); }   # sysfs counts 512-byte sectors
+size_gb() { awk -v b="$(size_bytes "$1")" 'BEGIN { printf "%.1f GB", b / 1e9 }'; }
+model() { sys "$1" device/model | sed 's/ *$//'; }
+
+# The disk a partition is on: /sys/class/block/sdb2 links to .../sdb/sdb2.
+disk_of() { basename "$(dirname "$(readlink -f "/sys/class/block/$1")")"; }
+
+# The partition named $2 (GPT partition name) on disk $1.
+partition_named() {
+    local p
+    for p in $(partitions_of "$1"); do
+        if grep -qx "PARTNAME=$2" "/sys/class/block/$p/uevent"; then echo "$p"; return; fi
+    done
+}
+
+# Partitions on disk $1, e.g. "sdb1 sdb2" (or "nvme0n1p1 nvme0n1p2").
+partitions_of() {
+    local p
+    for p in /sys/class/block/"$1"/"$1"*; do
+        [ -e "$p/partition" ] && basename "$p"
+    done
+    return 0
+}
+
+# Partition number $2 on disk $1.
+partition_number() {
+    local p
+    for p in $(partitions_of "$1"); do
+        [ "$(sys "$p" partition)" = "$2" ] && { echo "$p"; return; }
+    done
+    return 0
+}
+
+# --- Which disk are we running from? -------------------------------------------
+
+# The initramfs mounted the root partition as /dev/NAME, so /proc/mounts says.
+root_dev=$(awk '$2 == "/" && $1 ~ "^/dev/" { d = $1 } END { print d }' /proc/mounts)
+[ -n "$root_dev" ] || die "can't tell which disk LakerLinux is running from"
+root_part=$(basename "$root_dev")
+this_disk=$(disk_of "$root_part")
+this_boot=$(partition_named "$this_disk" "$BOOT_LABEL")
+[ -n "$this_boot" ] || this_boot=$(partition_number "$this_disk" 1)
+[ -n "$this_boot" ] || die "can't find the EFI System Partition on /dev/$this_disk"
+
+list_disks() {
+    local d found=0
+    echo "LakerLinux is running from /dev/$this_disk. Disks you could install to:"
+    for d in $(ls /sys/class/block); do
+        is_partition "$d" && continue
+        [ "$d" = "$this_disk" ] && continue
+        [ "$(sys "$d" size)" -gt 0 ] 2>/dev/null || continue   # empty card readers etc.
+        case "$d" in loop*|ram*|zram*|sr*|fd*) continue ;; esac
+        printf '  %-10s %9s  %s\n' "$d" "$(size_gb "$d")" "$(model "$d")"
+        found=1
+    done
+    [ "$found" = 1 ] || echo "  (none: plug in a USB stick and try again)"
+    echo "Then: laker-install NAME   (e.g. laker-install sdb)"
+}
+
+# --- Arguments ---------------------------------------------------------------------
+
+yes=0
+if [ "${1:-}" = -y ]; then yes=1; shift; fi
+case "${1:-}" in
+    "")        list_disks; exit 0 ;;
+    -h|--help) sed -n '3,20p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+esac
+[ "$(id -u)" = 0 ] || die "run this as root"
+
+disk=$(basename "$1")
+[ -e "/sys/class/block/$disk" ] || die "no disk called $disk (run laker-install with no arguments to list them)"
+is_partition "$disk" && die "$disk is a partition; give the whole disk (e.g. $(disk_of "$disk"))"
+[ "$disk" != "$this_disk" ] || die "$disk is the disk LakerLinux is running from"
+for p in $disk $(partitions_of "$disk"); do
+    if awk -v d="/dev/$p" '$1 == d { found = 1 } END { exit !found }' /proc/mounts; then
+        die "/dev/$p is mounted; unmount it first (umount /dev/$p)"
+    fi
+done
+
+# Room for: the EFI partition, plus everything on this root file system with
+# 20% to spare, plus 1 MiB at each end for the partition table.
+boot_sectors=$(sys "$this_boot" size)
+used_kb=$(df -Pk / | awk 'NR == 2 { print $3 }')
+need_bytes=$(( boot_sectors * 512 + used_kb * 1024 * 12 / 10 + 2 * 1048576 ))
+have_bytes=$(size_bytes "$disk")
+if [ "$have_bytes" -lt "$need_bytes" ]; then
+    die "$disk is too small: it has $(( have_bytes / 1048576 )) MiB, LakerLinux needs about $(( need_bytes / 1048576 )) MiB"
+fi
+
+echo "Installing LakerLinux from /dev/$this_disk to:"
+echo "  /dev/$disk  $(size_gb "$disk")  $(model "$disk")"
+if [ "$yes" != 1 ]; then
+    printf 'This erases everything on /dev/%s. Type "yes" to continue: ' "$disk"
+    read -r answer
+    [ "$answer" = yes ] || die "stopped; nothing was changed"
+fi
+
+# --- 1. Partition table -----------------------------------------------------------
+
+# The same two partitions as out/lakerlinux.img, with the boot partition
+# exactly the size of this one's so it can be copied byte for byte. The root
+# partition gets a new random ID (PARTUUID), so no two LakerLinux disks share one.
+new_partuuid=$(cat /proc/sys/kernel/random/uuid)
+echo "==> Partitioning /dev/$disk"
+sfdisk --quiet --wipe always --wipe-partitions always "/dev/$disk" <<EOF
+label: gpt
+start=2048, size=$boot_sectors, type=uefi, name="$BOOT_LABEL"
+start=$(( 2048 + boot_sectors )), type=linux, uuid=$new_partuuid, name="$ROOT_LABEL"
+EOF
+
+# The kernel re-reads the partition table, then /dev gets the new partitions.
+new_boot="" new_root=""
+for i in 1 2 3 4 5 6 7 8 9 10; do
+    new_boot=$(partition_number "$disk" 1)
+    new_root=$(partition_number "$disk" 2)
+    [ -n "$new_boot" ] && [ -n "$new_root" ] && [ -b "/dev/$new_root" ] && break
+    sleep 1
+done
+[ -b "/dev/$new_root" ] || die "the new partitions on /dev/$disk didn't appear"
+
+# --- 2. Boot partition: a straight copy -------------------------------------------
+
+echo "==> Copying the boot partition (/dev/$this_boot -> /dev/$new_boot)"
+dd if="/dev/$this_boot" of="/dev/$new_boot" bs=1M conv=fsync 2>/dev/null
+
+# --- 3. Root file system: a fresh ext4, then every file -----------------------------
+
+echo "==> Making an ext4 file system on /dev/$new_root"
+mke2fs -q -F -t ext4 -L "$ROOT_LABEL" "/dev/$new_root"
+
+cleanup() {
+    cd /
+    umount "$MOUNT_DIR" 2>/dev/null || true
+    rmdir "$MOUNT_DIR" 2>/dev/null || true
+}
+trap cleanup EXIT
+mkdir -p "$MOUNT_DIR"
+mount -t ext4 "/dev/$new_root" "$MOUNT_DIR"
+
+# Copy everything on the root file system, but not what's mounted on top of
+# it (/proc, /sys, /dev, /run, /tmp, ...): those directories are copied
+# empty. GNU cp can do that itself (-x); BusyBox's can't, but its find and
+# cpio can.
+echo "==> Copying files ($(( used_kb / 1024 )) MiB; this takes a while on a USB stick)"
+if cp --version >/dev/null 2>&1; then
+    cp -ax /. "$MOUNT_DIR/"
+    rmdir "$MOUNT_DIR$MOUNT_DIR" 2>/dev/null || true
+else
+    cd /
+    find . -xdev -path ".$MOUNT_DIR" -prune -o -print | cpio -dmu -p "$MOUNT_DIR"
+fi
+
+# The LFS system's /etc/fstab names its root partition by PARTUUID: point the
+# copy's at its own.
+if [ -f "$MOUNT_DIR/etc/fstab" ]; then
+    sed -i "s|^PARTUUID=[^[:space:]]*\([[:space:]]\+/[[:space:]]\)|PARTUUID=$new_partuuid\1|" "$MOUNT_DIR/etc/fstab"
+fi
+
+echo "==> Writing everything to the disk"
+sync
+cleanup
+trap - EXIT
+
+echo "Done. /dev/$disk now boots LakerLinux: choose it in your computer's boot menu."
