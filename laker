@@ -4,6 +4,8 @@
 #
 #   ./laker build [stage...]   build kernel + userland + disk image (inside Docker)
 #   ./laker run [--direct]     boot out/lakerlinux.img in QEMU
+#   ./laker lfs status|download|redo <step>
+#                              Linux From Scratch steps (SYSTEM=lfs)
 #   ./laker shell              a shell inside the build container
 #   ./laker diff [<component> [name]]
 #                              show your source edits, or save them as a patch
@@ -12,8 +14,10 @@
 #
 # Components: kernel, glibc, busybox, binutils, gcc, tcc, make.
 #
-# Choose the compiler with COMPILER=gcc (default), tcc or both, e.g.
+# Choose the system with SYSTEM=busybox (default) or lfs, and the busybox
+# system's compiler with COMPILER=gcc (default), tcc or both, e.g.
 #   COMPILER=tcc ./laker build
+#   SYSTEM=lfs ./laker build
 #
 # Set LAKER_NATIVE=1 to skip Docker and use your own Linux toolchain
 # (see README.md for the package list).
@@ -21,9 +25,28 @@
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
-IMAGE=lakerlinux-builder
-VOLUME=lakerlinux-build   # kernel tree lives in a Docker volume: faster, and
-                          # macOS's case-insensitive filesystem can't hold it
+# SYSTEM: from the command line, else its default in config/versions.sh.
+# (Everything else in that file is read inside the container.)
+SYSTEM="${SYSTEM:-$(sed -n 's/^SYSTEM="${SYSTEM:-\(.*\)}"$/\1/p' config/versions.sh)}"
+if [ "${1:-}" = lfs ]; then SYSTEM=lfs; fi   # ./laker lfs ... is always about LFS
+
+# Each system has its own Docker image and build volume. The build lives in a
+# volume: faster than your own disk, and macOS's case-insensitive filesystem
+# can't hold the kernel tree.
+case "$SYSTEM" in
+    busybox)
+        IMAGE=lakerlinux-builder
+        VOLUME=lakerlinux-build
+        DOCKER_OPTS=(--rm -i) ;;
+    lfs)
+        # Always an x86_64 container: the LFS build runs the new system's
+        # programs in a chroot. On Apple Silicon, Docker Desktop emulates x86_64.
+        # --privileged: the chroot needs /dev, /proc and /sys mounted.
+        IMAGE=lakerlinux-lfs-builder
+        VOLUME=lakerlinux-lfs-build
+        DOCKER_OPTS=(--rm -i --platform linux/amd64 --privileged) ;;
+    *) echo "SYSTEM must be busybox or lfs (not \"$SYSTEM\")" >&2; exit 1 ;;
+esac
 
 in_env() {
     if [ "${LAKER_NATIVE:-0}" = 1 ]; then
@@ -31,16 +54,21 @@ in_env() {
         return
     fi
     command -v docker >/dev/null || { echo "Docker not found. Install Docker, or set LAKER_NATIVE=1." >&2; exit 1; }
-    docker build -q -t "$IMAGE" . >/dev/null
+    if [ "$SYSTEM" = lfs ]; then
+        docker build -q --platform linux/amd64 -t "$IMAGE" . >/dev/null
+    else
+        docker build -q -t "$IMAGE" . >/dev/null
+    fi
     # One array that's never empty: macOS ships bash 3.2, which treats an
     # empty "${array[@]}" as an unbound variable under `set -u`.
-    local opts=(--rm -i)
+    local opts=("${DOCKER_OPTS[@]}")
     [ -t 0 ] && opts+=(-t)
     [ -e /dev/kvm ] && opts+=(--device /dev/kvm)   # Linux hosts only
     # Pass through the settings people override on the command line,
     # e.g. `MEM=2G ./laker run` (see config/versions.sh and scripts/run.sh).
     local v
-    for v in COMPILER JOBS MEM KERNEL_VERSION KERNEL_URL GLIBC_VERSION GLIBC_URL BUSYBOX_VERSION BUSYBOX_URL TCC_COMMIT TCC_URL IMAGE_SIZE_MB; do
+    opts+=(-e "SYSTEM=$SYSTEM")
+    for v in COMPILER JOBS MEM KERNEL_VERSION KERNEL_URL GLIBC_VERSION GLIBC_URL BUSYBOX_VERSION BUSYBOX_URL TCC_COMMIT TCC_URL LFS_MIRROR IMAGE_SIZE_MB; do
         if [ -n "${!v:-}" ]; then opts+=(-e "$v=${!v}"); fi
     done
     docker run "${opts[@]}" \
@@ -53,11 +81,12 @@ cmd="${1:-help}"; shift || true
 case "$cmd" in
     build) in_env scripts/build.sh "$@" ;;
     run)   in_env scripts/run.sh "$@" ;;
+    lfs)   in_env scripts/lfs.sh "$@" ;;
     shell) in_env bash ;;
     diff)  in_env scripts/source.sh diff "$@" ;;
     reset) in_env scripts/source.sh reset "$@" ;;
     clean)
         rm -rf out
-        in_env bash -c 'b="${BUILD_DIR:-build}"; rm -rf "$b/src" "$b/rootfs" "$b"/*.img "$b/kernel.fragment" "$b/sysroot" "$b/kernel-headers" "$b"/glibc-build-* "$b"/cross* "$b"/devtools* "$b/tcc-build" "$b"/make-build-*' ;;
-    *) sed -n '3,20p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
+        in_env bash -c 'b="${BUILD_DIR:-build}"; rm -rf "$b/src" "$b/rootfs" "$b"/*.img "$b/kernel.fragment" "$b/sysroot" "$b/kernel-headers" "$b"/glibc-build-* "$b"/cross* "$b"/devtools* "$b/tcc-build" "$b"/make-build-* "$b/lfs" "$b/lfs-done" "$b/lfs-logs"' ;;
+    *) sed -n '3,23p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
 esac

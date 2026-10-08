@@ -15,7 +15,13 @@ programs inside LakerLinux itself. The compiler is your choice: GCC, the
 standard GNU compiler, or TCC, a tiny one you can read in an afternoon.
 Everything else is up to you.
 
+Or build the full version: a complete, conventional GNU/Linux system built by
+following [Linux From Scratch](https://www.linuxfromscratch.org/lfs/view/12.4/)
+12.4, one book section at a time. See
+[Two ways to build](#two-ways-to-build-busybox-or-linux-from-scratch).
+
 - [Quick start](#quick-start)
+- [Two ways to build: BusyBox or Linux From Scratch](#two-ways-to-build-busybox-or-linux-from-scratch)
 - [What's in this repository](#whats-in-this-repository)
 - [Where everything comes from](#where-everything-comes-from)
 - [How the build works](#how-the-build-works)
@@ -23,6 +29,7 @@ Everything else is up to you.
 - [Choosing a compiler](#choosing-a-compiler)
 - [The toolchain: GCC, binutils and make](#the-toolchain-gcc-binutils-and-make)
 - [The Tiny C Compiler](#the-tiny-c-compiler)
+- [The full system: Linux From Scratch](#the-full-system-linux-from-scratch)
 - [Changing the kernel or BusyBox source](#changing-the-kernel-or-busybox-source)
 - [The root filesystem and `rootfs-overlay/`](#the-root-filesystem-and-rootfs-overlay)
 - [How it boots](#how-it-boots)
@@ -48,7 +55,8 @@ Tiny C Compiler instead of GCC:
 COMPILER=tcc ./laker build
 ```
 
-See [Choosing a compiler](#choosing-a-compiler).
+See [Choosing a compiler](#choosing-a-compiler). For the full Linux From Scratch
+system instead (several hours), use `SYSTEM=lfs ./laker build`.
 
 At the `lakerlinux login:` prompt, type **`root`**. There's no password.
 Inside LakerLinux, run `poweroff` when you're done. If it gets stuck, press
@@ -69,6 +77,39 @@ LAKER_NATIVE=1 ./laker build
 LAKER_NATIVE=1 ./laker run
 ```
 
+## Two ways to build: BusyBox or Linux From Scratch
+
+`SYSTEM` in `config/versions.sh` chooses what LakerLinux is built from. Set it
+there, or for one build on the command line:
+
+```sh
+./laker build                    # SYSTEM=busybox, the default
+SYSTEM=lfs ./laker build
+SYSTEM=lfs ./laker run
+```
+
+| | `busybox` (default) | `lfs` |
+|---|---|---|
+| Userland | [BusyBox](https://busybox.net): one program providing ~300 commands | The real GNU tools: coreutils, bash, util-linux, grep, sed, ... about 80 packages |
+| C library | glibc 2.42 | glibc 2.42 (built by the book) |
+| Compiler | GCC or TCC, your choice (`COMPILER`) | GCC 15.2.0 (built by the book) |
+| Also includes | | Perl, Python, vim, man pages, SysVinit and the LFS boot scripts |
+| First build | 20 minutes (TCC) to an hour (GCC) | Several hours |
+| Disk image | 2 GB | 8 GB |
+| Build container | Native to your computer | Always x86_64 (emulated on Apple Silicon), `--privileged` |
+| How it's built | This README, from here to [The Tiny C Compiler](#the-tiny-c-compiler) | [The full system: Linux From Scratch](#the-full-system-linux-from-scratch) |
+
+The BusyBox system is quick to build and small enough to understand in one
+sitting: a good start. The LFS system is what a "real" distribution looks
+like, and every package in it is a short script you can read alongside the
+book.
+
+The two systems keep separate Docker volumes (`lakerlinux-build` and
+`lakerlinux-lfs-build`), so building one never disturbs the other. Both
+write `out/lakerlinux.img`, though: `./laker run` boots whichever you built
+last. Everything else in this README (the kernel, the boot process, running it)
+applies to both, except where it says otherwise.
+
 ## What's in this repository
 
 ```
@@ -82,7 +123,12 @@ patches/              changes to the source of each component
   glibc/, busybox/    ...to glibc and BusyBox
   binutils/, gcc/, make/
                       ...to the toolchain (gcc/ has two, from the LFS book)
-rootfs-overlay/       files copied onto the root filesystem as-is
+lfs/                  SYSTEM=lfs: Linux From Scratch, one script per book section
+  book/               the book's package list (wget-list-sysv) and checksums (md5sums)
+  4-prepare/ ... 9-config/
+                      chapters 4 to 11, in order
+  rootfs-overlay/     LakerLinux's own files, copied on top of the LFS system
+rootfs-overlay/       files copied onto the BusyBox root filesystem as-is
   etc/inittab         what init (PID 1) starts
   etc/init.d/rcS      the boot script
   etc/init.d/rcK      the shutdown script
@@ -90,10 +136,14 @@ rootfs-overlay/       files copied onto the root filesystem as-is
   usr/share/udhcpc/   the script that applies DHCP settings
 scripts/
   build.sh            the whole build, in eight readable stages
+  lfs.sh              SYSTEM=lfs: runs the lfs/ scripts in order
+  lfs-step.sh         SYSTEM=lfs: runs one lfs/ script (unpack, patch, build, clean up)
   run.sh              boots the image in QEMU
   source.sh           ./laker diff and ./laker reset
   common.sh           settings shared by the scripts, and the patch handling
 build/                (generated, native builds only) sources and intermediate files
+tools/
+  extract-book.py     generates lfs/ scripts from the LFS book (for upgrading)
 out/                  (generated) lakerlinux.img and bzImage
 ```
 
@@ -109,6 +159,7 @@ downloaded during the build and never committed. Changes to them are kept in `pa
 | glibc source | The official release tarball from the [GNU project](https://ftp.gnu.org/gnu/glibc/): `glibc-<version>.tar.xz` | `config/versions.sh` (`GLIBC_VERSION`, `GLIBC_URL`) |
 | binutils, GCC, GMP, MPFR, MPC and make source | Official release tarballs from the [GNU project](https://ftp.gnu.org/gnu/) | `config/versions.sh` (`BINUTILS_VERSION`, `GCC_VERSION`, ..., and `GNU_MIRROR`) |
 | TCC source | A pinned commit of TCC's development branch ("mob"), as a tarball from [its GitHub mirror](https://github.com/TinyCC/tinycc) | `config/versions.sh` (`TCC_COMMIT`, `TCC_URL`) |
+| Everything in `SYSTEM=lfs` but the kernel (95 packages and patches) | The versions in LFS 12.4, from the [LFS project's mirror](https://ftp.osuosl.org/pub/lfs/lfs-packages/12.4/), checked against the book's MD5 checksums | `lfs/book/wget-list-sysv`, `config/versions.sh` (`LFS_MIRROR`) |
 | BusyBox source | The official release tarball from [busybox.net](https://busybox.net/downloads/): `busybox-<version>.tar.bz2` | `config/versions.sh` (`BUSYBOX_VERSION`, `BUSYBOX_URL`) |
 | Compilers, `make`, disk tools, QEMU, UEFI firmware | Ubuntu 24.04 packages, installed into the Docker image by `Dockerfile` (or by you, for a native build) | `Dockerfile` |
 | Changes to any of that source | This repository: `patches/<component>/` | |
@@ -139,6 +190,12 @@ Downloaded tarballs are cached in `downloads/` inside the build directory (see
 below), so they're fetched once. `./laker clean` keeps them.
 
 ## How the build works
+
+This section describes the BusyBox system. With `SYSTEM=lfs`, there are five
+stages instead: **fetch** (the kernel and the LFS sources), **kernel**, **lfs**
+(the whole book: see
+[The full system](#the-full-system-linux-from-scratch)), **rootfs** (copy
+`lfs/rootfs-overlay/` on top) and **image**.
 
 `./laker build` runs `scripts/build.sh`. Under Docker, it runs inside a
 container built from `Dockerfile`, which `./laker` builds the first time you use
@@ -467,6 +524,161 @@ links against LakerLinux's glibc:
   `libtcc1.a` only works in-tree.
 
 GNU make is built the same way, whichever compiler you choose.
+
+## The full system: Linux From Scratch
+
+With `SYSTEM=lfs`, LakerLinux is built entirely from source by following
+[Linux From Scratch](https://www.linuxfromscratch.org/lfs/view/12.4/) (LFS)
+12.4, the classic step-by-step guide to building a GNU/Linux system yourself.
+Every section of the book is a short script in `lfs/`, and the build runs them
+all, in Docker.
+
+What you get is a complete, conventional Linux system: the GNU toolchain (GCC,
+binutils, make), bash, coreutils, util-linux, Perl, Python, vim, man pages,
+SysVinit with the LFS boot scripts, and about 75 other packages.
+
+```sh
+SYSTEM=lfs ./laker build        # several hours; resumes where it left off if stopped
+SYSTEM=lfs ./laker run          # log in as root, no password
+./laker lfs status              # in another terminal: which steps are done
+```
+
+The build records each step as it finishes. If it stops (an error, a closed
+laptop, Ctrl-C), run it again and it carries on from that step. On a Mac,
+`caffeinate -i SYSTEM=lfs ./laker build` keeps the Mac awake meanwhile.
+
+### Linux From Scratch, automated
+
+The [LFS book](https://www.linuxfromscratch.org/lfs/view/12.4/) is the best
+documentation for this build: read it alongside the scripts. Every script in
+`lfs/` starts with the section it comes from and a link to that page:
+
+```sh
+# LFS 12.4, 8.35. Grep-3.12
+# https://www.linuxfromscratch.org/lfs/view/12.4/chapter08/grep.html
+# Package: grep-3.12.tar.xz
+# (1 test-suite command block(s) from the book left out.)
+
+./configure --prefix=/usr
+
+make
+
+make install
+```
+
+The rest of the script is the book's commands for that section, exactly as
+printed. `tools/extract-book.py` generated these scripts from the book itself.
+Wherever LakerLinux had to differ, there's a comment starting with
+`LakerLinux:` explaining why.
+
+#### What happens in each step
+
+`scripts/lfs-step.sh` does what the book's "General Compilation Instructions"
+ask of you before and after each section:
+
+1. go to the sources directory and unpack the package named on the `# Package:`
+   line;
+2. `cd` into it, and apply any patches in `patches/lfs/<package>/`;
+3. run the section's commands;
+4. go back and delete the unpacked source.
+
+`scripts/lfs.sh` runs the steps in order and records each one that succeeds. A
+step's output goes to `lfs-logs/` in the build directory; if a step fails, you
+see the end of its log.
+
+#### Where each chapter runs
+
+| Chapters | Where | Environment |
+|---|---|---|
+| 4 to 6 | In the build container | The variables the book sets up in section 4.4: `LFS`, `LFS_TGT`, a `PATH` starting with the new cross-compiler, `LC_ALL=POSIX`, `CONFIG_SITE` |
+| 7 to 11 | Inside the new system, with `chroot` (section 7.4) | `/dev`, `/proc`, `/sys` and `/run` mounted as in section 7.3, and a clean environment |
+
+This is why the build container runs with `--privileged`: mounting those file
+systems needs it.
+
+#### Commands
+
+| Command | What it does |
+|---|---|
+| `./laker lfs status` | Lists every step, marking the finished ones |
+| `./laker lfs redo 8-system/35-bash.sh` | Runs one step again |
+| `./laker lfs download` | Downloads and checks the sources only |
+| `SYSTEM=lfs ./laker build lfs` | Runs every unfinished step (part of `./laker build`) |
+
+#### Where LakerLinux differs from the book
+
+- **You're root, in a container.** The book has you create an `lfs` user for
+  chapters 5 and 6, so a mistake can't damage the computer you're building on.
+  Here the Docker container plays that role. `FORCE_UNSAFE_CONFIGURE=1` lets a
+  few packages' configure scripts run as root.
+- **Test suites are skipped.** The book marks them optional, and running them
+  takes hours. Each script notes how many test blocks it left out. Try one: run
+  the package's `make check` by hand.
+- **No GRUB.** LakerLinux boots the kernel directly from UEFI firmware (see
+  [How it boots](#how-it-boots)), so `8-system/63-grub.sh` has a `# Skip:` line.
+  Delete that line to build GRUB anyway.
+- **The kernel** is built by the `kernel` stage, not by chapter 10's
+  instructions, and it has no loadable modules.
+- **Choices the book leaves to you**, all marked in the scripts: time zone
+  `America/Detroit`, US English UTF-8 locale, letter paper, no root password,
+  the host name `lakerlinux`, and a network set up for QEMU (below). Only the
+  book's list of individual locales is installed, not all of them.
+- **A login prompt on the serial console**, added to `/etc/inittab`, because
+  that's the terminal `./laker run` shows you.
+- **Nothing that needs a person at the keyboard**: `exec bash --login`,
+  `tzselect`, `passwd` and the chapter 7 backup are replaced, with comments.
+
+### Changing an LFS package's build
+
+Edit its script in `lfs/`, then run it again:
+
+```sh
+vim lfs/8-system/72-vim.sh
+./laker lfs redo 8-system/72-vim.sh
+SYSTEM=lfs ./laker build rootfs image
+```
+
+Later packages that depend on it aren't rebuilt automatically. Redo those too,
+or delete `lfs-done/` in the build directory to rebuild everything.
+
+### Changing an LFS package's source
+
+Make a patch and put it in `patches/lfs/<package>/`, where `<package>` is the
+tarball's name without `.tar.*`, e.g. `patches/lfs/grep-3.12/`. The step applies
+it after unpacking, before the book's commands. To make one, in `./laker shell`:
+
+```sh
+cd /tmp && tar -xf /build/lfs-sources/grep-3.12.tar.xz
+cp -a grep-3.12 grep-3.12.orig
+vim grep-3.12/src/grep.c                    # make your change
+diff -Naur grep-3.12.orig grep-3.12 > /lakerlinux/patches/lfs/grep-3.12/0001-my-change.patch
+```
+
+(Create the directory first.) Then `./laker lfs redo 8-system/34-grep.sh`.
+
+### How the LFS system boots
+
+The kernel and the disk image are the same as the BusyBox system's (see
+[How it boots](#how-it-boots)); what runs after the kernel differs:
+
+```
+UEFI firmware           finds the FAT "EFI System Partition" and runs
+                        \EFI\BOOT\BOOTX64.EFI
+  -> Linux kernel       that file *is* the kernel (built with EFI_STUB), so
+                        there's no bootloader. Its built-in command line says
+                        which partition is the root file system.
+    -> /sbin/init       SysVinit (LFS 8.82) reads /etc/inittab
+      -> rc S, rc 3     the LFS boot scripts (LFS 9.2): mount file systems,
+                        start udev, check and remount /, set the clock and
+                        host name, bring up eth0, start syslog
+      -> agetty -> login -> bash
+```
+
+The network is set up statically for QEMU (`10.0.2.15`, gateway `10.0.2.2`,
+DNS `10.0.2.3`) by `lfs/9-config/02-network.sh`, rather than with DHCP. To
+boot a real machine, change `/etc/sysconfig/ifconfig.eth0` to suit your
+network, or build a DHCP client such as `dhcpcd` from
+[Beyond LFS](https://www.linuxfromscratch.org/blfs/).
 
 ## Changing the kernel or BusyBox source
 
@@ -854,5 +1066,18 @@ Ideas for student projects, roughly in order of difficulty:
   of this repository; its `Dockerfile` installs `g++-x86-64-linux-gnu`. Then delete
   the glibc build folder (`rm -rf /build/glibc-build-*` in `./laker shell`) so
   `configure` runs again.
-- **Start over.** `./laker clean` deletes everything except downloaded tarballs.
+- **An LFS step failed.** The error shows the end of the step's log; the full
+  log is in `/build/lfs-logs/` (`SYSTEM=lfs ./laker shell`). Fix the cause, then
+  run `SYSTEM=lfs ./laker build` again: it starts from the failed step.
+- **"some downloads don't match lfs/book/md5sums".** A download was cut off or
+  the mirror changed a file. Delete it from `/build/lfs-sources/` and build
+  again. To use a different mirror, set `LFS_MIRROR`.
+- **"... still has file systems mounted from the lfs stage".** An LFS build was
+  killed in chapter 7 or later. Run `SYSTEM=lfs ./laker build lfs` (it unmounts
+  when it finishes), or restart Docker.
+- **The LFS build is very slow on a Mac.** Its container runs as x86_64,
+  emulated on Apple Silicon. Turn on Rosetta in Docker Desktop's settings, and
+  give Docker as many CPUs and as much memory as you can.
+- **Start over.** `./laker clean` deletes everything except downloaded tarballs
+  (with `SYSTEM=lfs`, the LFS build's).
   Saved patches are safe: they're in `patches/`.

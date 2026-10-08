@@ -1,4 +1,13 @@
-# Which C compiler LakerLinux ships (see "Choosing a compiler" in README.md):
+# Which system to build (see "Two ways to build" in README.md):
+#   busybox  a small system: BusyBox, glibc, and a compiler (COMPILER below);
+#            about 20 minutes to an hour
+#   lfs      a complete GNU/Linux system built by following Linux From
+#            Scratch 12.4, about 80 packages; several hours
+# Override it for one build with e.g. SYSTEM=lfs ./laker build
+SYSTEM="${SYSTEM:-busybox}"
+
+# Which C compiler the busybox system ships (see "Choosing a compiler" in
+# README.md). The lfs system always has GCC, built by the book.
 #   gcc   GCC 15 and binutils: C and C++, optimizing; about an hour to build
 #   tcc   the Tiny C Compiler: C only, tiny and fast; builds in a minute
 #   both  both of them (cc runs gcc)
@@ -33,11 +42,27 @@ MPC_URL="$GNU_MIRROR/mpc/mpc-${MPC_VERSION}.tar.gz"
 MAKE_URL="$GNU_MIRROR/make/make-${MAKE_VERSION}.tar.gz"
 TCC_URL="${TCC_URL:-https://github.com/TinyCC/tinycc/archive/${TCC_COMMIT}.tar.gz}"
 
+# SYSTEM=lfs: everything but the kernel comes from Linux From Scratch 12.4.
+# The package versions are the book's (lfs/book/wget-list-sysv), downloaded
+# from the LFS project's mirror of that release.
+LFS_VERSION=12.4
+LFS_MIRROR="${LFS_MIRROR:-https://ftp.osuosl.org/pub/lfs/lfs-packages/$LFS_VERSION}"
+
 # Disk layout. The partition UUID is fixed so the kernel's built-in command
 # line can always find the root filesystem (root=PARTUUID=...).
-# 2 GB leaves room for the compiler and for building software inside LakerLinux.
-IMAGE_SIZE_MB="${IMAGE_SIZE_MB:-2048}"
+# The image is a sparse file, so its empty space doesn't use disk on your
+# computer. The defaults leave room for building software inside LakerLinux.
+if [ "$SYSTEM" = lfs ]; then
+    IMAGE_SIZE_MB="${IMAGE_SIZE_MB:-8192}"
+else
+    IMAGE_SIZE_MB="${IMAGE_SIZE_MB:-2048}"
+fi
 ESP_SIZE_MB=64
 DISK_GUID="4c414b45-5200-4c49-4e55-580000000000"
 ROOT_PARTUUID="4c414b45-5200-4c49-4e55-580000000002"
 ROOT_FS_UUID="4c414b45-5200-4c49-4e55-580000000003"
+
+# The kernel's built-in command line (see "How it boots" in README.md).
+# net.ifnames=0 keeps the network card's traditional name, eth0, which both
+# systems' network setup uses.
+KERNEL_CMDLINE="root=PARTUUID=$ROOT_PARTUUID rootwait net.ifnames=0 console=tty0 console=ttyS0,115200"

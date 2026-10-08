@@ -1,16 +1,21 @@
 #!/usr/bin/env bash
 #
-# Build LakerLinux: a Linux kernel, the GNU C library, a BusyBox userland and
-# a C compiler (GCC or TCC, see COMPILER in config/versions.sh), packed into a
-# bootable UEFI disk image.
+# Build LakerLinux: a Linux kernel and a userland, packed into a bootable UEFI
+# disk image. SYSTEM (config/versions.sh) chooses the userland:
+#
+#   SYSTEM=busybox (default)   the GNU C library, BusyBox and a C compiler
+#                              (GCC or TCC: see COMPILER)
+#     stages: fetch kernel glibc cross devtools busybox rootfs image
+#   SYSTEM=lfs                 Linux From Scratch 12.4 (scripts/lfs.sh)
+#     stages: fetch kernel lfs rootfs image
 #
 #   scripts/build.sh            # build everything
-#   scripts/build.sh kernel     # just one stage:
-#                               #   fetch|kernel|glibc|cross|devtools|busybox|rootfs|image
+#   scripts/build.sh kernel     # just one stage
 #
 # Every stage is a plain shell function below -- read them, they're short.
 # Shared settings, and the code that applies patches/, are in common.sh.
-# Nothing here needs root: the disk image is assembled from ordinary files.
+# Only the lfs stage needs root (for its chroot): the disk image is
+# assembled from ordinary files.
 
 set -euo pipefail
 
@@ -103,6 +108,11 @@ autobuild() {
 
 stage_fetch() {
     fetch_one "$KERNEL_URL" "$KERNEL_SRC"
+    if [ "$SYSTEM" = lfs ]; then
+        sync_patches kernel
+        "$LAKER_DIR/scripts/lfs.sh" download
+        return 0
+    fi
     fetch_one "$GLIBC_URL" "$GLIBC_SRC"
     fetch_one "$BUSYBOX_URL" "$BUSYBOX_SRC"
     fetch_one "$MAKE_URL" "$MAKE_SRC"
@@ -126,7 +136,7 @@ stage_kernel() {
     # Layer our options on top of the defaults.
     local frag="$BUILD_DIR/kernel.fragment"
     cp "$LAKER_DIR/config/kernel.fragment" "$frag"
-    echo "CONFIG_CMDLINE=\"root=PARTUUID=$ROOT_PARTUUID rootwait console=tty0 console=ttyS0,115200\"" >> "$frag"
+    echo "CONFIG_CMDLINE=\"$KERNEL_CMDLINE\"" >> "$frag"
     (cd "$KERNEL_SRC" && ARCH=x86_64 scripts/kconfig/merge_config.sh -m .config "$frag")
     "${KMAKE[@]}" olddefconfig
 
@@ -333,7 +343,20 @@ strip_tree() {
     done
 }
 
+# SYSTEM=lfs: Linux From Scratch, chapters 4 to 11 (all but the kernel, which
+# the kernel stage builds, and GRUB, which LakerLinux doesn't need).
+stage_lfs() {
+    "$LAKER_DIR/scripts/lfs.sh" build
+}
+
 stage_rootfs() {
+    if [ "$SYSTEM" = lfs ]; then
+        # LFS builds the system in place; just add LakerLinux's own files.
+        [ -x "$ROOTFS/usr/bin/bash" ] || die "no LFS system yet; run ./laker build lfs first"
+        log "Copying lfs/rootfs-overlay/ into the LFS system"
+        cp -a "$LAKER_DIR/lfs/rootfs-overlay/." "$ROOTFS/"
+        return 0
+    fi
     log "Assembling root filesystem in $ROOTFS"
     rm -rf "$ROOTFS"
     mkdir -p "$ROOTFS"/{dev,proc,sys,run,tmp,root,home,mnt,var/log,etc}
@@ -388,6 +411,9 @@ EOF
 stage_image() {
     [ -f "$OUT_DIR/bzImage" ] || die "no kernel yet; run the kernel stage first"
     [ -d "$ROOTFS" ] || die "no rootfs yet; run the rootfs stage first"
+    if mountpoint -q "$ROOTFS/proc"; then
+        die "$ROOTFS still has file systems mounted from the lfs stage"
+    fi
     log "Creating disk image"
 
     local esp="$BUILD_DIR/esp.img" root="$BUILD_DIR/root.img" disk="$OUT_DIR/lakerlinux.img"
@@ -423,12 +449,17 @@ EOF
     echo "Boot it with: ./laker run"
 }
 
+if [ "$SYSTEM" = lfs ]; then
+    all_stages=(fetch kernel lfs rootfs image)
+else
+    all_stages=(fetch kernel glibc cross devtools busybox rootfs image)
+fi
 stages=("$@")
-[ ${#stages[@]} -eq 0 ] && stages=(fetch kernel glibc cross devtools busybox rootfs image)
+[ ${#stages[@]} -eq 0 ] && stages=("${all_stages[@]}")
 for s in "${stages[@]}"; do
-    case "$s" in
-        fetch|kernel|glibc|cross|devtools|busybox|rootfs|image) mkdir -p "$BUILD_DIR"; "stage_$s" ;;
-        *) die "unknown stage '$s' (expected fetch, kernel, glibc, cross, devtools, busybox, rootfs, image)" ;;
+    case " ${all_stages[*]} " in
+        *" $s "*) mkdir -p "$BUILD_DIR"; "stage_$s" ;;
+        *) die "unknown stage '$s' for SYSTEM=$SYSTEM (expected: ${all_stages[*]})" ;;
     esac
 done
 

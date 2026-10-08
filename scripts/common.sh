@@ -10,7 +10,13 @@ case "$BUILD_DIR" in /*) ;; *) BUILD_DIR="$PWD/$BUILD_DIR" ;; esac
 case "$OUT_DIR" in /*) ;; *) OUT_DIR="$PWD/$OUT_DIR" ;; esac
 DL_DIR="$BUILD_DIR/downloads"
 SRC_DIR="$BUILD_DIR/src"
-ROOTFS="$BUILD_DIR/rootfs"
+# The new system's root directory. The two systems build in different places,
+# so you can build both in one build directory.
+case "${SYSTEM:-busybox}" in
+    busybox) ROOTFS="$BUILD_DIR/rootfs" ;;
+    lfs)     ROOTFS="$BUILD_DIR/lfs" ;;
+    *) printf 'ERROR: SYSTEM must be busybox or lfs (not "%s")\n' "$SYSTEM" >&2; exit 1 ;;
+esac
 PATCH_DIR="$LAKER_DIR/patches"
 JOBS="${JOBS:-$(nproc)}"
 
