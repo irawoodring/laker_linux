@@ -292,6 +292,11 @@ devtools_tcc() {
             { tail -20 "$build/configure.log"; die "TCC configure failed; see $build/configure.log"; }
         echo "${args[*]}" > "$build/.configure-args"
     fi
+    # c2str.exe is a helper TCC's build compiles and then runs, to turn a
+    # header into C source. Build it for *this* machine (with the native gcc),
+    # or it would be an x86_64 LakerLinux program that can't run here (e.g.
+    # on Apple Silicon). make then sees it's up to date and leaves it alone.
+    gcc -DC2STR "$build/conftest.c" -o "$build/c2str.exe"
     log "Building TCC"
     make -C "$build" -j"$JOBS" x86_64-libtcc1-usegcc=yes > "$build/make.log" 2>&1 ||
         { tail -30 "$build/make.log"; die "TCC build failed; see $build/make.log"; }
