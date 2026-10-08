@@ -4,7 +4,7 @@ Changes to upstream source, kept as patch files.
 
 The build unpacks each release tarball, then applies every `*.patch` file in
 `patches/<component>/` (`kernel`, `glibc`, `busybox`, `binutils`, `gcc`,
-`tcc`, `make`), in name order, before compiling. `patches/lfs/` works a little
+`tcc`, `make`, `util-linux`, `e2fsprogs`), in name order, before compiling. `patches/lfs/` works a little
 differently; see the end of this file.
 Because the changes live here instead of only in the build directory, they're
 saved in git, show up in pull requests, and survive `./laker clean` and

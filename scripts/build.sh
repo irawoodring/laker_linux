@@ -3,8 +3,8 @@
 # Build LakerLinux: a Linux kernel and a userland, packed into a bootable UEFI
 # disk image. SYSTEM (config/versions.sh) chooses the userland:
 #
-#   SYSTEM=busybox (default)   the GNU C library, BusyBox and a C compiler
-#                              (GCC or TCC: see COMPILER)
+#   SYSTEM=busybox (default)   the GNU C library, BusyBox, a C compiler
+#                              (GCC or TCC: see COMPILER) and disk tools
 #     stages: fetch kernel glibc cross devtools busybox rootfs image
 #   SYSTEM=lfs                 Linux From Scratch 12.4 (scripts/lfs.sh)
 #     stages: fetch kernel lfs rootfs image
@@ -121,6 +121,8 @@ stage_fetch() {
         fetch_gcc
     fi
     if wants tcc; then fetch_one "$TCC_URL" "$TCC_SRC"; fi
+    fetch_one "$UTIL_LINUX_URL" "$UTIL_LINUX_SRC"
+    fetch_one "$E2FSPROGS_URL" "$E2FSPROGS_SRC"
     local comp
     for comp in $COMPONENTS; do
         [ -d "$(src_dir "$comp")" ] && sync_patches "$comp"
@@ -128,15 +130,40 @@ stage_fetch() {
     return 0
 }
 
+# The initramfs: a tiny file system built into the kernel, holding one
+# program, /init (initramfs/init.c), that finds and mounts the real root file
+# system. It's compiled with the build container's own C library, statically,
+# so it needs nothing else -- not even LakerLinux's glibc, which isn't built
+# yet. initramfs/files.list says what goes in it.
+build_initramfs() {
+    local dir="$BUILD_DIR/initramfs"
+    mkdir -p "$dir"
+    if [ ! -f "$dir/init" ] || [ "$LAKER_DIR/initramfs/init.c" -nt "$dir/init" ]; then
+        log "Compiling the initramfs's /init"
+        "$TARGET-gcc" -static -Os -Wall -o "$dir/init" "$LAKER_DIR/initramfs/init.c"
+        "$TARGET-strip" "$dir/init"
+    fi
+    # The list names files by their paths here; only replace it when it
+    # changes, so the kernel isn't relinked for nothing.
+    sed "s|@INIT@|$dir/init|" "$LAKER_DIR/initramfs/files.list" > "$dir/files.list.new"
+    if cmp -s "$dir/files.list.new" "$dir/files.list"; then
+        rm "$dir/files.list.new"
+    else
+        mv "$dir/files.list.new" "$dir/files.list"
+    fi
+}
+
 stage_kernel() {
     fetch_one "$KERNEL_URL" "$KERNEL_SRC"
     sync_patches kernel
+    build_initramfs
     log "Configuring Linux $KERNEL_VERSION"
     "${KMAKE[@]}" x86_64_defconfig
     # Layer our options on top of the defaults.
     local frag="$BUILD_DIR/kernel.fragment"
     cp "$LAKER_DIR/config/kernel.fragment" "$frag"
     echo "CONFIG_CMDLINE=\"$KERNEL_CMDLINE\"" >> "$frag"
+    echo "CONFIG_INITRAMFS_SOURCE=\"$BUILD_DIR/initramfs/files.list\"" >> "$frag"
     (cd "$KERNEL_SRC" && ARCH=x86_64 scripts/kconfig/merge_config.sh -m .config "$frag")
     "${KMAKE[@]}" olddefconfig
 
@@ -218,9 +245,9 @@ stage_cross() {
         --enable-languages=c,c++
 }
 
-# The compiler(s) chosen by COMPILER, and make, all built to run *inside*
-# LakerLinux and installed under $DEVTOOLS_ROOT (the rootfs stage copies them
-# into the image).
+# The compiler(s) chosen by COMPILER, make, and the disk tools laker-install
+# uses, all built to run *inside* LakerLinux and installed under
+# $DEVTOOLS_ROOT (the rootfs stage copies them into the image).
 stage_devtools() {
     [ -f "$SYSROOT/usr/lib/libc.so.6" ] || die "glibc isn't built yet; run ./laker build glibc first"
     fetch_one "$MAKE_URL" "$MAKE_SRC"
@@ -228,6 +255,7 @@ stage_devtools() {
     if wants gcc; then devtools_gcc; fi
     if wants tcc; then devtools_tcc; fi
     devtools_make
+    devtools_disk
 }
 
 # GCC and binutils, cross-compiled with the cross-compiler. Like chapter 6
@@ -315,6 +343,50 @@ devtools_make() {
         CC="$TARGET-gcc --sysroot=$SYSROOT" AR="$TARGET-ar" RANLIB="$TARGET-ranlib"
 }
 
+# sfdisk (from util-linux) and mke2fs (from e2fsprogs), which laker-install
+# needs: BusyBox's fdisk can't write GPT partition tables, and its mke2fs only
+# makes ext2. Built like make, with the build container's compiler. Their own
+# libraries (libfdisk, libext2fs, ...) are linked in statically, so nothing
+# but the programs goes into the image.
+devtools_disk() {
+    fetch_one "$UTIL_LINUX_URL" "$UTIL_LINUX_SRC"
+    fetch_one "$E2FSPROGS_URL" "$E2FSPROGS_SRC"
+    sync_patches util-linux
+    sync_patches e2fsprogs
+    local root="$DEVTOOLS_ROOT/disk" build
+    build="$(build_triplet)"
+    local cc=(CC="$TARGET-gcc --sysroot=$SYSROOT" AR="$TARGET-ar" RANLIB="$TARGET-ranlib")
+
+    # Just sfdisk and fdisk, and the libraries they need. (fdisks=check:
+    # also cfdisk, but only if ncurses is there, which it isn't.)
+    autobuild "util-linux $UTIL_LINUX_VERSION (sfdisk, fdisk)" "$UTIL_LINUX_SRC" \
+        "$BUILD_DIR/util-linux-build-$UTIL_LINUX_VERSION" "DESTDIR=$root" -- \
+        --prefix=/usr --bindir=/usr/bin --sbindir=/usr/sbin \
+        --build="$build" --host="$CROSS_TARGET" \
+        --disable-all-programs --enable-fdisks=check \
+        --enable-libfdisk --enable-libuuid --enable-libblkid --enable-libsmartcols \
+        --disable-shared --disable-nls --disable-asciidoc --disable-poman \
+        --disable-bash-completion --disable-liblastlog2 \
+        --without-python --without-systemd --without-udev --without-ncursesw \
+        --without-ncurses --without-tinfo --without-readline --without-cap-ng \
+        --without-libz --without-btrfs --without-econf --without-libmagic \
+        "${cc[@]}"
+
+    # mke2fs, e2fsck and friends. Their own copies of libuuid and libblkid.
+    autobuild "e2fsprogs $E2FSPROGS_VERSION (mke2fs, e2fsck)" "$E2FSPROGS_SRC" \
+        "$BUILD_DIR/e2fsprogs-build-$E2FSPROGS_VERSION" "DESTDIR=$root" -- \
+        --prefix=/usr --sysconfdir=/etc --build="$build" --host="$CROSS_TARGET" \
+        --disable-nls --disable-fsck --disable-uuidd --disable-fuse2fs \
+        --disable-e2scrub --without-libarchive \
+        --with-crond-dir=no --with-systemd-unit-dir=no --with-udev-rules-dir=no \
+        "${cc[@]}"
+
+    # Only the programs: not the libraries' headers and .a files, which are
+    # only needed to build these.
+    rm -rf "$root/usr/include" "$root/usr/lib" "$root/usr/share/bash-completion" \
+           "$root/usr/sbin/e2scrub" "$root/usr/sbin/e2scrub_all"
+}
+
 stage_busybox() {
     fetch_one "$BUSYBOX_URL" "$BUSYBOX_SRC"
     sync_patches busybox
@@ -360,6 +432,8 @@ stage_rootfs() {
         [ -x "$ROOTFS/usr/bin/bash" ] || die "no LFS system yet; run ./laker build lfs first"
         log "Copying lfs/rootfs-overlay/ into the LFS system"
         cp -a "$LAKER_DIR/lfs/rootfs-overlay/." "$ROOTFS/"
+        # The installer is the same for both systems.
+        install -m 755 "$LAKER_DIR/rootfs-overlay/usr/sbin/laker-install" "$ROOTFS/usr/sbin/"
         return 0
     fi
     log "Assembling root filesystem in $ROOTFS"
@@ -383,7 +457,7 @@ stage_rootfs() {
     # runs gcc. --remove-destination replaces BusyBox's symlinks for the same
     # names (ar, strings, ...) instead of writing through them into
     # /bin/busybox.
-    local tools=(make) t
+    local tools=(make disk) t
     if wants tcc; then tools+=(tcc); fi
     if wants gcc; then tools+=(gcc); fi
     for t in "${tools[@]}"; do

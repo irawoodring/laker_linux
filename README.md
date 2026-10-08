@@ -33,8 +33,9 @@ following [Linux From Scratch](https://www.linuxfromscratch.org/lfs/view/12.4/)
 - [Changing the kernel or BusyBox source](#changing-the-kernel-or-busybox-source)
 - [The root filesystem and `rootfs-overlay/`](#the-root-filesystem-and-rootfs-overlay)
 - [How it boots](#how-it-boots)
-- [Why there's no initramfs](#why-theres-no-initramfs)
+- [The initramfs](#the-initramfs)
 - [Running LakerLinux](#running-lakerlinux)
+- [Installing to a USB stick or another disk](#installing-to-a-usb-stick-or-another-disk)
 - [Everyday workflow](#everyday-workflow)
 - [Where to take it next](#where-to-take-it-next)
 - [Troubleshooting](#troubleshooting)
@@ -125,11 +126,16 @@ Dockerfile            the build environment (compilers, QEMU, disk tools)
 config/
   versions.sh         package versions, download URLs, disk layout
   kernel.fragment     kernel options, applied on top of the x86_64 defaults
+initramfs/            the initramfs built into the kernel
+  init.c              its one program: finds and mounts the root file system
+  files.list          what goes in it
 patches/              changes to the source of each component
   kernel/             *.patch files applied to the kernel, in name order
   glibc/, busybox/    ...to glibc and BusyBox
   binutils/, gcc/, make/
                       ...to the toolchain (gcc/ has two, from the LFS book)
+  util-linux/, e2fsprogs/
+                      ...to the disk tools
 lfs/                  SYSTEM=lfs: Linux From Scratch, one script per book section
   book/               the book's package list (wget-list-sysv) and checksums (md5sums)
   4-prepare/ ... 9-config/
@@ -141,6 +147,8 @@ rootfs-overlay/       files copied onto the BusyBox root filesystem as-is
   etc/init.d/rcK      the shutdown script
   etc/passwd, ...     users, hostname, shell profile, login banner
   usr/share/udhcpc/   the script that applies DHCP settings
+  usr/sbin/laker-install
+                      copies LakerLinux to another disk (both systems)
 scripts/
   build.sh            the whole build, in eight readable stages
   lfs.sh              SYSTEM=lfs: runs the lfs/ scripts in order
@@ -166,6 +174,7 @@ downloaded during the build and never committed. Changes to them are kept in `pa
 | glibc source | The official release tarball from the [GNU project](https://ftp.gnu.org/gnu/glibc/): `glibc-<version>.tar.xz` | `config/versions.sh` (`GLIBC_VERSION`, `GLIBC_URL`) |
 | binutils, GCC, GMP, MPFR, MPC and make source | Official release tarballs from the [GNU project](https://ftp.gnu.org/gnu/) | `config/versions.sh` (`BINUTILS_VERSION`, `GCC_VERSION`, ..., and `GNU_MIRROR`) |
 | TCC source | A pinned commit of TCC's development branch ("mob"), as a tarball from [its GitHub mirror](https://github.com/TinyCC/tinycc) | `config/versions.sh` (`TCC_COMMIT`, `TCC_URL`) |
+| util-linux and e2fsprogs source (for `sfdisk` and `mke2fs`) | Official release tarballs from [kernel.org](https://www.kernel.org/pub/linux/utils/util-linux/) | `config/versions.sh` (`UTIL_LINUX_VERSION`, `E2FSPROGS_VERSION`) |
 | Everything in `SYSTEM=lfs` but the kernel (95 packages and patches) | The versions in LFS 12.4, from the [LFS project's mirror](https://ftp.osuosl.org/pub/lfs/lfs-packages/12.4/), checked against the book's MD5 checksums | `lfs/book/wget-list-sysv`, `config/versions.sh` (`LFS_MIRROR`) |
 | BusyBox source | The official release tarball from [busybox.net](https://busybox.net/downloads/): `busybox-<version>.tar.bz2` | `config/versions.sh` (`BUSYBOX_VERSION`, `BUSYBOX_URL`) |
 | Compilers, `make`, disk tools, QEMU, UEFI firmware | Ubuntu 24.04 packages, installed into the Docker image by `Dockerfile` (or by you, for a native build) | `Dockerfile` |
@@ -177,7 +186,8 @@ The versions are pinned: currently **Linux 6.18.44** (a long-term-support
 series), **glibc 2.42**, **BusyBox 1.36.1**, and the toolchain from
 [Linux From Scratch 12.4](https://www.linuxfromscratch.org/lfs/view/12.4/):
 **GCC 15.2.0**, **binutils 2.45**, **GMP 6.3.0**, **MPFR 4.2.2**,
-**MPC 1.3.1** and **make 4.4.1**, plus TCC commit `43c7708` (October 2026).
+**MPC 1.3.1** and **make 4.4.1**, and its **util-linux 2.41.1** and
+**e2fsprogs 1.47.3**, plus TCC commit `43c7708` (October 2026).
 TCC's last formal release, 0.9.27, is from 2017 and can't handle today's
 glibc headers; development carries on in the "mob" branch. To upgrade, change the version in
 `config/versions.sh` and run `./laker build`. The build downloads anything it
@@ -213,10 +223,13 @@ it. The script runs eight stages in order. You can also run any subset, e.g.
    [Changing the kernel or BusyBox source](#changing-the-kernel-or-busybox-source)).
 2. **kernel**: configure and compile Linux.
    - Bring the source up to date with `patches/kernel/`.
+   - Compile `initramfs/init.c`, the program that goes in the kernel's
+     built-in initramfs (see [The initramfs](#the-initramfs)).
    - `make x86_64_defconfig` starts from the kernel's standard x86_64 defaults.
    - `scripts/kconfig/merge_config.sh` layers `config/kernel.fragment` on top.
    - The build also adds `CONFIG_CMDLINE`, the built-in kernel command line (see
-     [How it boots](#how-it-boots)).
+     [How it boots](#how-it-boots)), and `CONFIG_INITRAMFS_SOURCE`, the list
+     of files in the initramfs.
    - `make olddefconfig` fills in anything that depends on those choices.
    - `make bzImage` builds the compressed kernel, which is copied to `out/bzImage`.
 3. **glibc**: build the C library into the *sysroot* (see
@@ -230,7 +243,9 @@ it. The script runs eight stages in order. You can also run any subset, e.g.
    build container and produce programs for LakerLinux (see
    [The toolchain](#the-toolchain-gcc-binutils-and-make)). Only when
    `COMPILER` includes GCC.
-5. **devtools**: build the compiler(s) `COMPILER` asks for, and make, to run
+5. **devtools**: build the compiler(s) `COMPILER` asks for, make, and two
+   disk tools, `sfdisk` and `mke2fs` (from util-linux and e2fsprogs, for
+   [laker-install](#installing-to-a-usb-stick-or-another-disk)), to run
    *inside* LakerLinux.
 6. **busybox**: bring the source up to date with `patches/busybox/`, then
    configure and compile BusyBox. It starts from BusyBox's `defconfig`
@@ -278,17 +293,23 @@ src/glibc-2.42/         the glibc source tree (likewise)
 src/busybox-1.36.1/     the BusyBox source tree (likewise)
 src/binutils-2.45/, src/gcc-15.2.0/, src/make-4.4.1/
                         the toolchain source trees (likewise)
+src/util-linux-2.41.1/, src/e2fsprogs-1.47.3/
+                        the disk tools' source trees (likewise)
 src/gmp-6.3.0/, ...     GMP, MPFR and MPC, linked into the GCC tree, which builds them
 cross/                  the cross-compiler (x86_64-laker-linux-gnu-gcc and friends)
 cross-*/, devtools-*/   where GCC and binutils are compiled
 tcc-build/, make-build-*/
                         where TCC and make are compiled
-devtools/gcc/, devtools/tcc/, devtools/make/
+util-linux-build-*/, e2fsprogs-build-*/
+                        where the disk tools are compiled
+devtools/gcc/, devtools/tcc/, devtools/make/, devtools/disk/
                         each tool, installed, before it goes into the image
+initramfs/              the compiled /init, and the list of files in the initramfs
 glibc-build-2.42/       where glibc is compiled (glibc doesn't build inside its source tree)
 kernel-headers/         the kernel's headers, staged before they're copied into the sysroot
 sysroot/                glibc and the kernel headers, for compiling programs for LakerLinux
-kernel.fragment         the fragment as actually applied, with CONFIG_CMDLINE added
+kernel.fragment         the fragment as actually applied, with CONFIG_CMDLINE and
+                        CONFIG_INITRAMFS_SOURCE added
 rootfs/                 the root filesystem, as a directory
 esp.img, root.img       the two filesystem images, before they go into the disk image
 ```
@@ -343,8 +364,8 @@ Every x86_64 Linux program has the `/lib64` path built in, so the link has to be
 there, even though LakerLinux keeps its libraries in `/usr/lib`.
 
 BusyBox is now one of those programs. Because it's also `init`, the system
-can't start without glibc: if the loader or `libc.so.6` were missing, the kernel
-would stop with `Kernel panic - not syncing: No working init found`.
+can't start without glibc: if the loader or `libc.so.6` were missing, the
+initramfs would stop with `laker-init: can't run /sbin/init`.
 
 ### Running the loader yourself
 
@@ -677,13 +698,14 @@ The kernel and the disk image are the same as the BusyBox system's (see
 UEFI firmware           finds the FAT "EFI System Partition" and runs
                         \EFI\BOOT\BOOTX64.EFI
   -> Linux kernel       that file *is* the kernel (built with EFI_STUB), so
-                        there's no bootloader. Its built-in command line says
-                        which partition is the root file system.
-    -> /sbin/init       SysVinit (LFS 8.82) reads /etc/inittab
-      -> rc S, rc 3     the LFS boot scripts (LFS 9.2): mount file systems,
+                        there's no bootloader
+    -> /init            the initramfs finds the partition named "lakerroot"
+                        and mounts it as /
+      -> /sbin/init     SysVinit (LFS 8.82) reads /etc/inittab
+        -> rc S, rc 3   the LFS boot scripts (LFS 9.2): mount file systems,
                         start udev, check and remount /, set the clock and
                         host name, bring up eth0, start syslog
-      -> agetty -> login -> bash
+        -> agetty -> login -> bash
 ```
 
 The network is set up statically for QEMU (`10.0.2.15`, gateway `10.0.2.2`,
@@ -799,10 +821,11 @@ LakerLinux is running) in five layers:
 3. **glibc**: the libraries and headers in `/usr/lib` and `/usr/include`, and
    the dynamic loader's `/lib64` link (see
    [The C library: glibc](#the-c-library-glibc)).
-4. **The toolchain**: make and the compiler(s) `COMPILER` chose, from
-   `devtools/` (see [Choosing a compiler](#choosing-a-compiler)). Where they
-   have a command with the same name as one of BusyBox's (`ar`, `strings`,
-   ...), the real one replaces BusyBox's. With TCC, its source goes in
+4. **The toolchain and disk tools**: make, the compiler(s) `COMPILER`
+   chose, and `sfdisk`, `mke2fs` and `e2fsck`, from `devtools/` (see
+   [Choosing a compiler](#choosing-a-compiler)). Where they have a command
+   with the same name as one of BusyBox's (`ar`, `strings`, `fdisk`, ...),
+   the real one replaces BusyBox's (or comes first in `PATH`). With TCC, its source goes in
    `/usr/src/tinycc`.
 5. **The overlay**: everything in `rootfs-overlay/` is copied on top, keeping
    the same paths. `rootfs-overlay/etc/inittab` becomes `/etc/inittab`, and a file
@@ -829,6 +852,7 @@ What the overlay contains:
 | `etc/profile` | Shell setup at login: `PATH`, the prompt, `umask` |
 | `etc/issue`, `etc/motd` | Text shown before and after login |
 | `usr/share/udhcpc/default.script` | Called by the DHCP client to set the IP address, route, and `/etc/resolv.conf` |
+| `usr/sbin/laker-install` | Copies LakerLinux to another disk (see [Installing to a USB stick](#installing-to-a-usb-stick-or-another-disk)). The LFS system gets it too |
 
 Finally, debug information is stripped from every program and library, which
 saves well over a gigabyte with GCC. The result is about 270 MB with GCC, or
@@ -862,20 +886,22 @@ UEFI firmware                 reads the GPT partition table, finds the FAT
                               "EFI System Partition", and runs
                               \EFI\BOOT\BOOTX64.EFI
   -> Linux kernel             that file *is* the kernel (built with EFI_STUB),
-                              so we don't need GRUB. It mounts the root
-                              filesystem named in its built-in command line.
-    -> /sbin/init             BusyBox init reads /etc/inittab
-      -> /etc/init.d/rcS      mounts /proc, /sys, ...; sets the hostname; gets
+                              so we don't need GRUB
+    -> /init                  a tiny program built into the kernel (the
+                              initramfs): finds the partition named
+                              "lakerroot" and mounts it as /
+      -> /sbin/init           BusyBox init reads /etc/inittab
+        -> /etc/init.d/rcS    mounts /proc, /sys, ...; sets the hostname; gets
                               an IP address over DHCP
-      -> getty -> login -> sh
+        -> getty -> login -> sh
 ```
 
 The disk image (`out/lakerlinux.img`, 2 GB) has two partitions:
 
-| # | Type | Size  | Contents |
-|---|------|-------|----------|
-| 1 | FAT  | 64 MB | `EFI/BOOT/BOOTX64.EFI` (the kernel) |
-| 2 | ext4 | rest  | the root filesystem, with partition UUID `4c414b45-5200-4c49-4e55-580000000002` |
+| # | Name (in the partition table) | Type | Size  | Contents |
+|---|------|------|-------|----------|
+| 1 | `LAKERBOOT` | FAT  | 64 MB | `EFI/BOOT/BOOTX64.EFI` (the kernel) |
+| 2 | `lakerroot` | ext4 | rest  | the root filesystem |
 
 Step by step:
 
@@ -888,68 +914,98 @@ Step by step:
 
    | Option | Meaning |
    |---|---|
-   | `root=PARTUUID=4c414b45-...-02` | Mount the partition with this GPT ID as `/`. The ID is fixed in `config/versions.sh`, so it's the same in every build |
-   | `rootwait` | Wait for that disk to appear instead of giving up: USB and NVMe disks show up a moment after boot starts |
+   | `net.ifnames=0` | Keep the network card's traditional name, `eth0`, which both systems' network setup uses |
    | `console=tty0 console=ttyS0,115200` | Send kernel messages to the screen and to the serial port. The last one listed (serial, which `./laker run` shows you) becomes `/dev/console` |
 
-   The kernel finds its drivers (they're built in), mounts the ext4 partition
-   read-only, and mounts `devtmpfs` on `/dev`, so device files like `/dev/vda`
-   appear without any help from userspace.
-3. **init.** The kernel runs `/sbin/init`, BusyBox's `init`, as process 1. It
-   reads `/etc/inittab`, which tells it to:
+   The kernel starts its drivers (they're built in) and finds the disks.
+3. **The initramfs.** The kernel unpacks the small file system built into it
+   and runs its `/init` (see [The initramfs](#the-initramfs)). That waits for
+   the partition named `lakerroot` to appear, mounts it read-only on
+   `/newroot`, moves `/dev` (a `devtmpfs`, where device files like `/dev/vda`
+   appear by themselves) across, and makes `/newroot` the root directory.
+4. **init.** `/init` runs the root filesystem's `/sbin/init`, BusyBox's `init`,
+   which takes over as process 1. It reads `/etc/inittab`, which tells it to:
    - run `/etc/init.d/rcS` once;
    - keep a login prompt (`getty`) running on the serial port and on the
      first virtual terminal, restarting it after each logout;
    - run `/etc/init.d/rcK` at shutdown.
-4. **rcS.** The boot script:
+5. **rcS.** The boot script:
    - mounts everything in `/etc/fstab`, plus `/dev/pts` for terminals;
    - remounts `/` read-write (the kernel mounts it read-only so it can be
      checked first; we skip the check);
    - sets the hostname;
    - brings up the network and asks for an address over DHCP;
    - runs every executable `/etc/init.d/S*` script with `start`, in name order.
-5. **Login.** `getty` prints `/etc/issue` and asks for a user name. `login`
+6. **Login.** `getty` prints `/etc/issue` and asks for a user name. `login`
    checks `/etc/passwd`, prints `/etc/motd`, and starts `/bin/sh`, which reads
    `/etc/profile`.
 
 `./laker run --direct` skips step 1: QEMU loads `out/bzImage` itself and passes
 the command line with `-append`.
 
-## Why there's no initramfs
+## The initramfs
 
-On most distributions, the kernel doesn't mount your real root filesystem
-first. Instead it unpacks an **initramfs**: a small archive (in `cpio` format) of
-files that's loaded into memory along with the kernel. The kernel runs that
-archive's `/init` program, which prepares the real root filesystem and then
-switches to it. Distributions need this step because their kernels are generic:
-they can only reach the root filesystem after userspace has done some setup, such
-as:
+When Linux starts, it doesn't mount your root filesystem straight away. It
+first unpacks an **initramfs**: a small archive of files (in `cpio` format) that
+it keeps in memory. It runs that archive's `/init` program, which finds and
+prepares the real root filesystem and then switches to it. Most distributions
+need this step because their kernels are generic: before they can reach the
+root filesystem, userspace has to load drivers, unlock an encrypted disk,
+assemble RAID or LVM, or find the disk on the network.
 
-- loading the kernel modules for the disk controller and filesystem;
-- unlocking an encrypted disk, or assembling RAID or LVM volumes;
-- finding the root filesystem by label or UUID, or over the network.
+LakerLinux's drivers are all built into the kernel, so the kernel *could* mount
+the root filesystem by itself, given its ID on the command line
+(`root=PARTUUID=...`). But that ID is compiled into the kernel, and a USB stick
+made with [laker-install](#installing-to-a-usb-stick-or-another-disk) needs
+its own. So LakerLinux's initramfs finds the root filesystem by its
+partition's **name** instead, `lakerroot`, which every LakerLinux disk has.
 
-LakerLinux needs none of that. The storage drivers and ext4 are compiled into
-the kernel, and the kernel can find a partition by its PARTUUID by itself. So it
-mounts the root filesystem directly and runs `/sbin/init` from it.
+The initramfs holds just one program, `/init`, built from
+[`initramfs/init.c`](initramfs/init.c): under 400 lines of C, written to be
+read. It:
 
-You may notice this line in the boot messages:
+1. mounts `/dev`, `/proc` and `/sys`, to see the disks the kernel has found;
+2. looks in `/sys/class/block/*/uevent` for a partition whose `PARTNAME` is
+   `lakerroot`, checking again every tenth of a second until one appears (USB
+   disks take a few seconds);
+3. if it finds more than one (say, two LakerLinux USB sticks are plugged in),
+   lists them on every console and asks which to start, picking the first
+   after 10 seconds;
+4. mounts it read-only on `/newroot`, moves `/dev` over, and makes `/newroot`
+   the root directory (what the `switch_root` command does);
+5. runs `/sbin/init` from it, which takes over as process 1.
 
-```
-check access for rdinit=/init failed: -2, ignoring
-```
+If something goes wrong it says so, and waits (Ctrl-Alt-Del restarts).
 
-The kernel always checks for an initramfs `/init` first (its built-in initramfs
-is empty, since `CONFIG_INITRAMFS_SOURCE` is unset). Error -2 means "no such
-file", so it moves on to the `root=` partition. That's expected.
+It's a static program (it carries its own copy of the C library), compiled
+with the build container's compiler, so it doesn't need LakerLinux's glibc,
+which isn't built yet when the kernel is. It's 800 KB. The kernel stage
+compiles it and builds it into the kernel, using `CONFIG_INITRAMFS_SOURCE`.
+That names [`initramfs/files.list`](initramfs/files.list), the list of
+what goes in the archive: `/init`, a few empty directories, and
+`/dev/console`.
 
-Adding an initramfs makes a good project. Build a directory with BusyBox (and
-the glibc files it needs, or a separate static BusyBox) and an `/init` script that mounts the real root and runs `switch_root`, then
-either:
+**Options.** `/init` reads the kernel command line (`/proc/cmdline`). You can
+add these to `KERNEL_CMDLINE` in `config/versions.sh`, or type them in when
+booting through a bootloader:
 
-- point `CONFIG_INITRAMFS_SOURCE` at it in `config/kernel.fragment` to build it into the kernel; or
-- pack it with `cpio` and load it separately (`-initrd` in QEMU, or `initrd=` on
-  the EFI stub's command line).
+| Option | Meaning |
+|---|---|
+| `root=/dev/sdb2` | Use this partition, instead of looking for `lakerroot` |
+| `root=PARTLABEL=name` | Look for a partition with this name instead |
+| `rootfstype=ext4` | The filesystem type (by default it tries every type the kernel knows) |
+| `rw` | Mount the root filesystem read-write (it's read-only by default, so it can be checked; both systems' boot scripts remount it read-write) |
+| `init=/bin/sh` | Run this instead of `/sbin/init`: a quick way into a broken system |
+
+**Changing it.** Edit `initramfs/init.c` (or add files to
+`initramfs/files.list`), then `./laker build kernel image`. Ideas:
+
+- Add a rescue shell: put a static BusyBox in the initramfs, and have `/init`
+  start it when something goes wrong.
+- A "live" USB stick that never changes: pack the root filesystem into one
+  read-only, compressed SquashFS file, and have `/init` mount it with a RAM
+  disk on top (`overlayfs`), so changes vanish at reboot.
+- Check the root filesystem with `e2fsck` before mounting it.
 
 ## Running LakerLinux
 
@@ -979,11 +1035,76 @@ unless you add a port forward to `scripts/run.sh` (QEMU's `hostfwd` option). `pi
 to outside hosts may not work, depending on your computer's settings, even when
 everything else does.
 
-**Booting a real machine.** Write `out/lakerlinux.img` to a USB stick (with
-`dd`, or a tool like balenaEtcher), turn off Secure Boot, and boot from USB in
-UEFI mode. The kernel includes drivers for common SATA and NVMe disks, Intel
+**Booting a real machine.** Write `out/lakerlinux.img` to a USB stick (see
+below), turn off Secure Boot, and boot from USB in UEFI mode. The kernel
+includes drivers for USB disks and keyboards, common SATA and NVMe disks, Intel
 network cards, and a basic framebuffer console. Your machine's hardware may need
-more.
+more (add its drivers to `config/kernel.fragment`).
+
+## Installing to a USB stick or another disk
+
+There are two ways to get LakerLinux onto a USB stick.
+
+**From your computer:** write the disk image to it. On macOS:
+
+```sh
+diskutil list                          # find the stick, e.g. /dev/disk4
+diskutil unmountDisk /dev/disk4
+sudo dd if=out/lakerlinux.img of=/dev/rdisk4 bs=4m
+```
+
+On Linux, `lsblk` lists the disks, then
+`sudo dd if=out/lakerlinux.img of=/dev/sdX bs=4M conv=fsync status=progress`.
+Either way, check the name carefully: this erases the whole disk. Tools like
+balenaEtcher do the same thing. The stick ends up with a 2 GB system (8 GB for
+LFS), however big it is.
+
+**From LakerLinux itself:** `laker-install` copies the running system onto
+another disk, so a LakerLinux USB stick can make more of them:
+
+```sh
+laker-install          # lists the disks you could install to
+laker-install sdb      # installs to /dev/sdb (asks first: it erases it)
+```
+
+It makes the same two partitions as the disk image, but with the root
+partition filling the whole disk:
+
+1. **Partitions.** `sfdisk` writes a new GPT partition table: `LAKERBOOT`, the
+   same size as the running system's, then `lakerroot` with the rest.
+2. **Boot partition.** `dd` copies the running system's, byte for byte. It only
+   holds the kernel, `\EFI\BOOT\BOOTX64.EFI`.
+3. **Root filesystem.** `mke2fs` formats `lakerroot` as ext4, and every file
+   on the running system's root filesystem is copied across (`cp -ax` on the
+   LFS system; `find` and `cpio` on BusyBox, whose `cp` can't stay on one
+   filesystem). `/proc`, `/sys`, `/dev`, `/run` and `/tmp` are copied empty,
+   since what's in them is made at boot.
+
+Because the copy's root partition is also named `lakerroot`, the same kernel
+finds it when it boots (see [The initramfs](#the-initramfs)). Each copy gets a
+new partition ID, though, and on the LFS system, `laker-install` updates the
+copy's `/etc/fstab` to match.
+
+The script is [`rootfs-overlay/usr/sbin/laker-install`](rootfs-overlay/usr/sbin/laker-install),
+plain `sh` that runs on both systems. BusyBox's own `fdisk` can't write GPT
+partition tables and its `mke2fs` only makes ext2, so the BusyBox system gets
+the real `sfdisk` (from util-linux) and `mke2fs` (from e2fsprogs); the LFS
+system has them already.
+
+**Trying it in QEMU.** `./laker run --usb` plugs in a virtual 4 GB USB stick,
+`out/usb.img` (made the first time, blank). Inside LakerLinux, it's `/dev/sda`:
+
+```sh
+./laker run --usb
+# log in, then:
+laker-install sda
+poweroff
+
+./laker run --boot-usb     # boots from the USB stick alone
+./laker run --usb          # both disks: /init asks which to start
+```
+
+To start again with a blank stick, delete `out/usb.img`.
 
 ## Everyday workflow
 
@@ -991,11 +1112,13 @@ more.
 |--------------------------------|---------------------------------------|
 | something in `rootfs-overlay/` | `./laker build rootfs image`          |
 | `config/kernel.fragment`       | `./laker build kernel image`          |
+| `initramfs/`                   | `./laker build kernel image`          |
 | kernel source code             | `./laker build kernel image`, then `./laker diff kernel <name>` to keep it |
 | BusyBox config or source       | `./laker build busybox rootfs image`  |
 | glibc source                   | `./laker build glibc busybox rootfs image` |
 | GCC or binutils source         | `./laker build cross devtools rootfs image` |
 | TCC or make source             | `./laker build devtools rootfs image` |
+| util-linux or e2fsprogs source | `./laker build devtools rootfs image` |
 | `COMPILER`                     | `./laker build cross devtools rootfs image` |
 | a program in `rootfs-overlay/` | `./laker build rootfs image`          |
 | a file in `patches/`           | `./laker build` (the stages re-apply all patches) |
@@ -1034,7 +1157,8 @@ Ideas for student projects, roughly in order of difficulty:
   Write a "hello world" kernel module. Teach the build to
   compile and install modules into `/lib/modules`. Add a `/proc` file. Add a
   system call and a userspace program that calls it.
-- **An initramfs.** See [Why there's no initramfs](#why-theres-no-initramfs).
+- **The initramfs.** Add a rescue shell, or make a "live" USB stick. See
+  [The initramfs](#the-initramfs).
 - **Replace BusyBox pieces.** Write your own `init`, your own shell, or your
   own `ls`, and swap it in for BusyBox's.
 - **Replace BusyBox with the real tools.** Build GNU coreutils, bash, grep,
@@ -1074,10 +1198,18 @@ Ideas for student projects, roughly in order of difficulty:
 - **"patches/kernel/NNNN-name.patch doesn't apply".** The patch was made
   for different source: another kernel version, or before an earlier patch
   changed the same lines. Fix the patch, or remove it to build without it.
-- **"Kernel panic - not syncing: No working init found".** The kernel couldn't
-  run BusyBox as `init`, usually because glibc's loader or a library is missing
-  from the image. Check that `./laker build` ran the glibc and rootfs stages
+- **"laker-init: waiting for a partition named "lakerroot" to appear".** The
+  initramfs can't find the root filesystem. On a real machine, the kernel may
+  lack the driver for that disk's controller: add it to
+  `config/kernel.fragment`. A disk image made before the partitions were
+  named needs `./laker build image` again.
+- **"laker-init: can't run /sbin/init".** The root filesystem's `/sbin/init`
+  couldn't run, usually because glibc's loader or a library is missing from
+  the image. Check that `./laker build` ran the glibc and rootfs stages
   without errors.
+- **laker-install says "... is mounted".** Unmount it first, e.g.
+  `umount /dev/sdb1`. It won't install to a disk in use, or to the one it's
+  running from.
 - **glibc fails with "'-fcf-protection=full' is not supported for this target"
   (Apple Silicon).** The build container is missing the x86_64 C++
   cross-compiler, so it's using one for the wrong CPU. Pull the latest version

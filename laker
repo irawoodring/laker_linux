@@ -3,7 +3,9 @@
 # LakerLinux front door.
 #
 #   ./laker build [stage...]   build kernel + userland + disk image (inside Docker)
-#   ./laker run [--direct]     boot out/lakerlinux.img in QEMU
+#   ./laker run [--direct] [--usb | --boot-usb]
+#                              boot out/lakerlinux.img in QEMU (--usb: with a
+#                              virtual USB stick to install to; see README.md)
 #   ./laker lfs status|download|redo <step>
 #                              Linux From Scratch steps (SYSTEM=lfs)
 #   ./laker shell              a shell inside the build container
@@ -12,7 +14,8 @@
 #   ./laker reset <component>  throw away source edits you haven't saved
 #   ./laker clean              delete build output (keeps downloads)
 #
-# Components: kernel, glibc, busybox, binutils, gcc, tcc, make.
+# Components: kernel, glibc, busybox, binutils, gcc, tcc, make, util-linux,
+# e2fsprogs.
 #
 # Choose the system with SYSTEM=busybox (default) or lfs, and the busybox
 # system's compiler with COMPILER=gcc (default), tcc or both, e.g.
@@ -87,6 +90,6 @@ case "$cmd" in
     reset) in_env scripts/source.sh reset "$@" ;;
     clean)
         rm -rf out
-        in_env bash -c 'b="${BUILD_DIR:-build}"; rm -rf "$b/src" "$b/rootfs" "$b"/*.img "$b/kernel.fragment" "$b/sysroot" "$b/kernel-headers" "$b"/glibc-build-* "$b"/cross* "$b"/devtools* "$b/tcc-build" "$b"/make-build-* "$b/lfs" "$b/lfs-done" "$b/lfs-logs"' ;;
-    *) sed -n '3,23p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
+        in_env bash -c 'b="${BUILD_DIR:-build}"; rm -rf "$b/src" "$b/rootfs" "$b"/*.img "$b/kernel.fragment" "$b/sysroot" "$b/kernel-headers" "$b"/glibc-build-* "$b"/cross* "$b"/devtools* "$b/tcc-build" "$b"/make-build-* "$b"/util-linux-build-* "$b"/e2fsprogs-build-* "$b/initramfs" "$b/lfs" "$b/lfs-done" "$b/lfs-logs"' ;;
+    *) sed -n '3,26p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
 esac

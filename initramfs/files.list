@@ -1,0 +1,15 @@
+# What goes in the initramfs, in the format of the kernel's gen_init_cpio
+# (see usr/gen_init_cpio.c in the kernel source). scripts/build.sh replaces
+# @INIT@ with the compiled initramfs/init.c.
+#
+#   dir  PATH MODE UID GID
+#   nod  PATH MODE UID GID c|b MAJOR MINOR
+#   file PATH SOURCE MODE UID GID
+
+dir  /dev     0755 0 0
+# The kernel opens this for /init's input and output, before /dev is mounted.
+nod  /dev/console 0600 0 0 c 5 1
+dir  /proc    0755 0 0
+dir  /sys     0755 0 0
+dir  /newroot 0755 0 0
+file /init    @INIT@ 0755 0 0
