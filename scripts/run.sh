@@ -41,7 +41,8 @@ if [ "$boot_usb" = 1 ]; then
     [ -f "$USB" ] || { echo "No $USB yet -- run ./laker run --usb and laker-install first." >&2; exit 1; }
 else
     [ -f "$DISK" ] || { echo "No $DISK yet -- run ./laker build first." >&2; exit 1; }
-    args+=(-drive "file=$DISK,format=raw,if=virtio")
+    args+=(-drive "file=$DISK,format=raw,if=none,id=disk"
+           -device virtio-blk-pci,drive=disk,bootindex=1)
 fi
 
 # The USB stick: a sparse file, so it takes no space until something's written.
@@ -54,7 +55,7 @@ if [ "$usb" = 1 ] || [ "$boot_usb" = 1 ]; then
     fi
     args+=(-device qemu-xhci,id=xhci
            -drive "file=$USB,format=raw,if=none,id=usbstick"
-           -device usb-storage,bus=xhci.0,drive=usbstick)
+           -device usb-storage,bus=xhci.0,drive=usbstick,bootindex=$(( boot_usb ? 1 : 2 )))
 fi
 
 # Hardware acceleration when available; plain emulation still works, just slower.
