@@ -481,6 +481,25 @@ strip_tree() {
 stage_lfs() {
     "$LAKER_DIR/scripts/lfs.sh" build
 }
+# Our own programs: each programs/NAME.c becomes /usr/bin/NAME in the image.
+# --sysroot points the compiler at the image itself, so they're compiled
+# against the image's own glibc, headers and libraries -- like compiling
+# inside LakerLinux, but from here. -s strips them.
+build_programs() {
+    local src name
+    for src in "$LAKER_DIR"/programs/*.c; do
+        [ -f "$src" ] || continue
+        name="$(basename "$src" .c)"
+        log "Compiling programs/$name.c"
+        "$TARGET-gcc" --sysroot="$ROOTFS" -O2 -Wall -s -o "$ROOTFS/usr/bin/$name" "$src" ||
+            die "programs/$name.c didn't compile"
+    done
+    # The source too, so you can read and rebuild it inside LakerLinux.
+    if ls "$LAKER_DIR"/programs/*.c >/dev/null 2>&1; then
+        mkdir -p "$ROOTFS/usr/src/programs"
+        cp "$LAKER_DIR"/programs/*.c "$ROOTFS/usr/src/programs/"
+    fi
+}
 
 stage_rootfs() {
     if [ "$SYSTEM" = lfs ]; then
@@ -490,6 +509,7 @@ stage_rootfs() {
         cp -a "$LAKER_DIR/lfs/rootfs-overlay/." "$ROOTFS/"
         # The installer is the same for both systems.
         install -m 755 "$LAKER_DIR/rootfs-overlay/usr/sbin/laker-install" "$ROOTFS/usr/sbin/"
+        build_programs
         return 0
     fi
     log "Assembling root filesystem in $ROOTFS"
@@ -543,6 +563,8 @@ ID=lakerlinux
 PRETTY_NAME="LakerLinux ($(date +%Y.%m.%d))"
 BUILD_ID=$(date +%Y%m%d%H%M)
 EOF
+
+build_programs
 }
 
 stage_image() {

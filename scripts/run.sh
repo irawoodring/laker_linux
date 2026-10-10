@@ -41,7 +41,8 @@ if [ "$boot_usb" = 1 ]; then
     [ -f "$USB" ] || { echo "No $USB yet -- run ./laker run --usb and laker-install first." >&2; exit 1; }
 else
     [ -f "$DISK" ] || { echo "No $DISK yet -- run ./laker build first." >&2; exit 1; }
-    args+=(-drive "file=$DISK,format=raw,if=virtio")
+    args+=(-drive "file=$DISK,format=raw,if=none,id=disk"
+    -device virtio-blk-pci,drive=disk,bootindex=1)
 fi
 
 # The USB stick: a sparse file, so it takes no space until something's written.
@@ -53,8 +54,8 @@ if [ "$usb" = 1 ] || [ "$boot_usb" = 1 ]; then
         echo "Made a blank 4 GB USB stick, $USB. Inside LakerLinux: laker-install sda"
     fi
     args+=(-device qemu-xhci,id=xhci
-           -drive "file=$USB,format=raw,if=none,id=usbstick"
-           -device usb-storage,bus=xhci.0,drive=usbstick)
+    -drive "file=$USB,format=raw,if=none,id=usbstick"
+    -device usb-storage,bus=xhci.0,drive=usbstick)
 fi
 
 # Hardware acceleration when available; plain emulation still works, just slower.
@@ -64,16 +65,16 @@ fi
 
 if [ "$direct" = 1 ]; then
     args+=(-kernel "$OUT_DIR/bzImage"
-           -append "$KERNEL_CMDLINE")
+    -append "$KERNEL_CMDLINE")
 else
     firmware=""
     for f in /usr/share/ovmf/OVMF.fd /usr/share/OVMF/OVMF.fd /usr/share/qemu/OVMF.fd \
-             /usr/share/edk2/x64/OVMF.fd /usr/share/edk2/ovmf/OVMF_CODE.fd \
-             /opt/homebrew/share/qemu/edk2-x86_64-code.fd /usr/local/share/qemu/edk2-x86_64-code.fd; do
-        [ -f "$f" ] && { firmware="$f"; break; }
-    done
-    [ -n "$firmware" ] || { echo "No UEFI firmware (OVMF) found; install 'ovmf' or use --direct." >&2; exit 1; }
-    args+=(-bios "$firmware")
+        /usr/share/edk2/x64/OVMF.fd /usr/share/edk2/ovmf/OVMF_CODE.fd \
+        /opt/homebrew/share/qemu/edk2-x86_64-code.fd /usr/local/share/qemu/edk2-x86_64-code.fd; do
+    [ -f "$f" ] && { firmware="$f"; break; }
+done
+[ -n "$firmware" ] || { echo "No UEFI firmware (OVMF) found; install 'ovmf' or use --direct." >&2; exit 1; }
+args+=(-bios "$firmware")
 fi
 
 exec qemu-system-x86_64 "${args[@]}"
