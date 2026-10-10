@@ -13,7 +13,8 @@ shell, and the build tools that tie it all together.
 It starts out deliberately small: a Linux kernel, the
 [GNU C library](https://www.gnu.org/software/libc/) (glibc),
 [BusyBox](https://busybox.net) (one program that provides `sh`, `ls`, `mount`,
-`vi`, `ip`, and ~300 other commands), a C compiler and GNU make, packed into a
+`vi`, `ip`, and ~300 other commands) or [Linux From Scratch](https://www.linuxfromscratch.org/lfs/),
+a C compiler and GNU make, packed into a
 disk image that boots in QEMU or on a real PC. You can write and compile
 programs inside LakerLinux itself. The compiler is your choice: GCC, the
 standard GNU compiler, or TCC, a tiny one you can read in an afternoon.
