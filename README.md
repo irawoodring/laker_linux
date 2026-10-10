@@ -502,9 +502,10 @@ lands in `rootfs-overlay/` and goes into the image.
 
 With `COMPILER=tcc` (or `both`), LakerLinux ships the
 [Tiny C Compiler](https://bellard.org/tcc/) (TCC), written by Fabrice Bellard
-(also the author of QEMU and FFmpeg). It's a complete C compiler, assembler and
+(also the author of QEMU, JSLinux, and FFmpeg and probably one of the world's
+smartest computer scientists). It's a complete C compiler, assembler and
 linker in one small program: around 30,000 lines of C, small enough to read.
-It compiles very quickly, at the cost of producing slower code than GCC.
+It compiles very quickly, at the cost of producing slower code than GCC (or so I've read; I haven't tested).
 
 | Command | What it is |
 |---|---|
