@@ -8,7 +8,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential bc bison flex libelf-dev libssl-dev cpio kmod \
         curl ca-certificates xz-utils bzip2 python3 \
-        e2fsprogs dosfstools mtools fdisk fakeroot \
+        e2fsprogs dosfstools mtools fdisk fakeroot sbsigntool \
         qemu-system-x86 ovmf \
         git patch vim nano less \
         rsync gawk m4 texinfo perl \

@@ -584,7 +584,20 @@ stage_image() {
     rm -f "$esp"
     mkfs.vfat -n LAKERBOOT -C "$esp" $((ESP_SIZE_MB * 1024)) >/dev/null
     mmd -i "$esp" ::/EFI ::/EFI/BOOT
-    mcopy -i "$esp" "$OUT_DIR/bzImage" ::/EFI/BOOT/BOOTX64.EFI
+    #mcopy -i "$esp" "$OUT_DIR/bzImage" ::/EFI/BOOT/BOOTX64.EFI
+        # Secure Boot: if there's a signing key in secureboot/, sign the kernel
+    # with it, so firmware that trusts the key will run it. (See "Secure
+    # Boot" in README.md.) Without a key, it's copied unsigned, as before.
+    local kernel="$OUT_DIR/bzImage" sb="$LAKER_DIR/secureboot"
+    if [ -f "$sb/db.key" ]; then
+        log "Signing the kernel for Secure Boot"
+        sbsign --key "$sb/db.key" --cert "$sb/db.crt" \
+            --output "$BUILD_DIR/BOOTX64.EFI" "$OUT_DIR/bzImage"
+        sbverify --cert "$sb/db.crt" "$BUILD_DIR/BOOTX64.EFI" >/dev/null ||
+            die "the signed kernel doesn't verify"
+        kernel="$BUILD_DIR/BOOTX64.EFI"
+    fi
+    mcopy -i "$esp" "$kernel" ::/EFI/BOOT/BOOTX64.EFI
 
     # 2. Root partition (ext4), populated straight from the rootfs directory.
     rm -f "$root"
