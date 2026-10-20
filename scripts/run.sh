@@ -96,7 +96,24 @@ else
     [ -f "$f" ] && { firmware="$f"; break; }
 done
 [ -n "$firmware" ] || { echo "No UEFI firmware (OVMF) found; install 'ovmf' or use --direct." >&2; exit 1; }
-args+=(-bios "$firmware")
+case "$firmware" in
+    *-code.fd|*_CODE.fd)
+        # Code-only firmware (Homebrew's, Fedora's) can't be loaded with
+        # -bios: it goes in a flash chip, next to a second one holding the
+        # firmware's settings (boot entries), started from the blank template.
+        vars_template="${firmware%/*}/edk2-i386-vars.fd"
+        case "$firmware" in *_CODE.fd) vars_template="${firmware%_CODE.fd}_VARS.fd" ;; esac
+        [ -f "$vars_template" ] || { echo "UEFI firmware $firmware has no settings template ($vars_template); use --direct." >&2; exit 1; }
+        vars="$OUT_DIR/efivars.fd"
+        if [ ! -f "$vars" ]; then
+            cp "$vars_template" "$vars"
+            if [ -n "${HOST_UID:-}" ]; then chown "$HOST_UID:${HOST_GID:-$HOST_UID}" "$vars"; fi
+        fi
+        args+=(-drive "if=pflash,format=raw,readonly=on,file=$firmware"
+        -drive "if=pflash,format=raw,file=$vars") ;;
+    *)
+        args+=(-bios "$firmware") ;;
+esac
 fi
 
 exec qemu-system-x86_64 "${args[@]}"
