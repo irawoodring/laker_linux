@@ -10,6 +10,12 @@
 #                             # laker-install on
 #   scripts/run.sh --boot-usb # boot from out/usb.img instead (after
 #                             # laker-install has put LakerLinux on it)
+#   scripts/run.sh --gui      # also open a window with a virtual screen,
+#                             # keyboard and mouse (for graphics work); the
+#                             # serial console stays in this terminal
+#
+# The options combine, e.g. --gui --direct. QEMU_DISPLAY picks the window
+# (default: cocoa on macOS, gtk elsewhere; see qemu-system-x86_64 -display help).
 #
 # Exit QEMU with Ctrl-A then X (or run `poweroff` inside LakerLinux).
 
@@ -21,21 +27,35 @@ OUT_DIR="${OUT_DIR:-$LAKER_DIR/out}"
 DISK="$OUT_DIR/lakerlinux.img"
 USB="$OUT_DIR/usb.img"
 
-direct=0 usb=0 boot_usb=0
+direct=0 usb=0 boot_usb=0 gui=0
 for arg in "$@"; do
     case "$arg" in
         --direct)   direct=1 ;;
         --usb)      usb=1 ;;
         --boot-usb) boot_usb=1 ;;
-        *) echo "unknown option $arg (expected --direct, --usb or --boot-usb)" >&2; exit 1 ;;
+        --gui)      gui=1 ;;
+        *) echo "unknown option $arg (expected --direct, --usb, --boot-usb or --gui)" >&2; exit 1 ;;
     esac
 done
 
 args=(
     -m "${MEM:-1G}" -smp 2
     -netdev user,id=net0 -device virtio-net-pci,netdev=net0
-    -nographic
 )
+
+if [ "$gui" = 1 ]; then
+    # virtio-vga: a screen the kernel drives with a real KMS driver
+    # (/dev/dri/card0). The tablet reports absolute positions, so the pointer
+    # inside follows yours exactly, with no mouse grab.
+    # mon:stdio keeps the serial console here, and Ctrl-A X working.
+    case "$(uname -s)" in Darwin) display=cocoa ;; *) display=gtk ;; esac
+    args+=(-device virtio-vga
+    -device virtio-keyboard-pci -device virtio-tablet-pci
+    -display "${QEMU_DISPLAY:-$display}"
+    -serial mon:stdio)
+else
+    args+=(-nographic)
+fi
 
 if [ "$boot_usb" = 1 ]; then
     [ -f "$USB" ] || { echo "No $USB yet -- run ./laker run --usb and laker-install first." >&2; exit 1; }
@@ -61,6 +81,8 @@ fi
 # Hardware acceleration when available; plain emulation still works, just slower.
 if [ -w /dev/kvm ]; then
     args+=(-enable-kvm -cpu host)
+elif [ "$(uname -s)" = Darwin ] && [ "$(uname -m)" = x86_64 ]; then
+    args+=(-accel hvf -cpu host)   # Intel Mac (only when run outside Docker: --gui)
 fi
 
 if [ "$direct" = 1 ]; then

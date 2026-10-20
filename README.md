@@ -1020,11 +1020,28 @@ booting through a bootloader:
 - 1 GB of RAM (set `MEM=2G` to change it) and 2 CPUs;
 - the disk image attached as a virtio disk, `/dev/vda` inside LakerLinux;
 - a virtio network card, `eth0`;
-- no graphical window: the serial console is your terminal.
+- no graphical window: the serial console is your terminal (`--gui` adds one,
+  below).
 
 On a Linux host where `/dev/kvm` is available, QEMU uses hardware
 virtualization and boots in a few seconds. Elsewhere (including macOS) it
 emulates the CPU, which is slower but works.
+
+**With a screen.** `./laker run --gui` opens a window instead: a virtual
+screen (`virtio-vga`, driven by a real KMS driver, so `/dev/dri/card0` exists),
+a keyboard, and a tablet-style mouse that follows your pointer with no mouse
+grab. Log in on the window or in the terminal, which still has the serial
+console (Ctrl-A then X still quits). This is the setup for graphics
+experiments: drawing to the framebuffer, DRM/KMS, reading `/dev/input/event*`.
+
+A window can't open from inside a Docker container, so `--gui` runs QEMU on
+your own computer. Install it first: `brew install qemu` on a Mac (the UEFI
+firmware comes with it), or `sudo apt install qemu-system-x86 ovmf` on
+Debian/Ubuntu. The window is Cocoa on macOS and GTK elsewhere; set
+`QEMU_DISPLAY` to choose another (`QEMU_DISPLAY=sdl`, or `vnc=:0` to connect
+with a VNC viewer). An Intel Mac gets hardware virtualization (`hvf`); on Apple
+Silicon the CPU is emulated. `--gui` combines with the other options, e.g.
+`./laker run --gui --direct`.
 
 **Networking.** QEMU's built-in "user mode" network gives LakerLinux a private
 network:
@@ -1193,6 +1210,15 @@ Ideas for student projects, roughly in order of difficulty:
   or give QEMU more memory with `MEM=2G ./laker run`.
 - **"No UEFI firmware (OVMF) found".** Install your distro's `ovmf` package, or
   use `./laker run --direct`.
+- **QEMU sits at "Booting from Hard Disk..."**, or says `-display gtk`/`sdl`
+  isn't accepted, when started by hand. LakerLinux boots from UEFI firmware, so
+  QEMU needs `-bios` pointing at OVMF, and only some QEMU builds have a GTK or
+  SDL window (macOS uses `cocoa`). `./laker run --gui` sets all of that up.
+- **`--gui` shows a console but nothing reacts to graphics or input
+  programs.** The kernel needs `CONFIG_DRM_VIRTIO_GPU`, `CONFIG_VIRTIO_INPUT`
+  and `CONFIG_INPUT_EVDEV` (in `config/kernel.fragment`); after pulling them,
+  run `./laker build kernel image`. Check with
+  `zcat /proc/config.gz | grep -E 'VIRTIO_GPU|VIRTIO_INPUT|EVDEV'`.
 - **My `menuconfig` changes disappeared.** The build regenerates `.config` every
   time. Put kernel options in `config/kernel.fragment` instead.
 - **My changes inside LakerLinux disappeared.** The image is rebuilt from

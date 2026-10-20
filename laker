@@ -3,9 +3,10 @@
 # LakerLinux front door.
 #
 #   ./laker build [stage...]   build kernel + userland + disk image (inside Docker)
-#   ./laker run [--direct] [--usb | --boot-usb]
+#   ./laker run [--direct] [--usb | --boot-usb] [--gui]
 #                              boot out/lakerlinux.img in QEMU (--usb: with a
-#                              virtual USB stick to install to; see README.md)
+#                              virtual USB stick to install to; --gui: in a
+#                              window, using your own QEMU; see README.md)
 #   ./laker lfs status|download|redo <step>
 #                              Linux From Scratch steps (SYSTEM=lfs)
 #   ./laker shell              a shell inside the build container
@@ -83,7 +84,15 @@ in_env() {
 cmd="${1:-help}"; shift || true
 case "$cmd" in
     build) in_env scripts/build.sh "$@" ;;
-    run)   in_env scripts/run.sh "$@" ;;
+    run)
+        # A window can't open from inside the container, so --gui runs your
+        # own QEMU (brew install qemu, or apt install qemu-system-x86 ovmf).
+        case " $* " in
+            *" --gui "*)
+                command -v qemu-system-x86_64 >/dev/null || { echo "--gui needs QEMU installed on this computer (brew install qemu, or apt install qemu-system-x86 ovmf)." >&2; exit 1; }
+                scripts/run.sh "$@" ;;
+            *) in_env scripts/run.sh "$@" ;;
+        esac ;;
     lfs)   in_env scripts/lfs.sh "$@" ;;
     shell) in_env bash ;;
     diff)  in_env scripts/source.sh diff "$@" ;;
@@ -91,5 +100,5 @@ case "$cmd" in
     clean)
         rm -rf out
         in_env bash -c 'b="${BUILD_DIR:-build}"; rm -rf "$b/src" "$b/rootfs" "$b"/*.img "$b/kernel.fragment" "$b/sysroot" "$b/kernel-headers" "$b"/glibc-build-* "$b"/cross* "$b"/devtools* "$b/tcc-build" "$b"/make-build-* "$b"/util-linux-build-* "$b"/e2fsprogs-build-* "$b/initramfs" "$b/lfs" "$b/lfs-done" "$b/lfs-logs" "$b"/zlib-build "$b"/openssl-build "$b"/curl-build "$b"/git-build"';;
-    *) sed -n '3,26p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
+    *) sed -n '3,27p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
 esac
