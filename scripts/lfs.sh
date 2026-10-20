@@ -9,6 +9,7 @@
 #   lfs/7-chroot/           chapter 7: enter the new system, more tools
 #   lfs/8-system/           chapter 8: the final system, package by package
 #   lfs/9-config/           chapters 9-11: boot scripts, network, fstab, ...
+#   lfs/extra/              beyond the book: libxkbcommon and pane, for graphics
 #
 #   scripts/lfs.sh                  # run every step that hasn't succeeded yet
 #   scripts/lfs.sh download         # just download and check the sources
@@ -58,11 +59,41 @@ download_sources() {
             die "some downloads don't match lfs/book/md5sums; delete them from $SOURCES and retry"
         touch "$SOURCES/.verified"
     fi
+    download_extra_sources
+}
+
+# lfs/extra/'s packages, listed in lfs/extra/sources with their own checksums
+# (or, for a git repository, the exact commit).
+download_extra_sources() {
+    local kind url sum commit file tmp
+    while read -r kind url sum file; do
+        case "$kind" in ''|'#'*) continue ;; esac
+        if [ "$kind" = git ]; then
+            commit="$sum"
+            [ -f "$SOURCES/$file" ] && continue
+            log "Downloading $file (${url##*/} at ${commit:0:12})"
+            tmp="$(mktemp -d)"
+            git -C "$tmp" init -q
+            git -C "$tmp" fetch -q --depth 1 "$url" "$commit" ||
+                die "can't fetch $commit from $url"
+            git -C "$tmp" archive --format=tar.gz --prefix="${file%.tar.gz}/" -o "$SOURCES/$file.part" FETCH_HEAD
+            rm -rf "$tmp"
+        else
+            # "URL MD5": the first two fields
+            sum="$url" url="$kind" file="${kind##*/}"
+            [ -f "$SOURCES/$file" ] && continue
+            log "Downloading $file"
+            curl -fL --retry 3 -o "$SOURCES/$file.part" "$url"
+            echo "$sum  $file.part" | (cd "$SOURCES" && md5sum --quiet -c -) ||
+                die "$file doesn't match its md5sum in lfs/extra/sources"
+        fi
+        mv "$SOURCES/$file.part" "$SOURCES/$file"
+    done < "$STEPS_DIR/extra/sources"
 }
 
 # --- Running steps -------------------------------------------------------
 
-steps() { (cd "$STEPS_DIR" && ls -1 [4-9]-*/*.sh); }
+steps() { (cd "$STEPS_DIR" && ls -1 [4-9]-*/*.sh extra/*.sh); }
 stamp() { echo "$DONE_DIR/${1//\//_}"; }
 
 # Chapters 4-6: in the build container, with the environment chapter 4.4
@@ -121,7 +152,7 @@ run_step() {
         touch "$(stamp "$step")"
         return 0
     fi
-    log "$step: $(sed -n '1s/^# LFS 12.4, //p' "$STEPS_DIR/$step")"
+    log "$step: $(sed -n '1s/^# \(LFS 12.4, \|Extra: \)//p' "$STEPS_DIR/$step")"
     local start=$SECONDS
     case "$step" in
         [4-6]-*) run_on_host "$step" ;;
