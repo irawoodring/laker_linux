@@ -145,7 +145,7 @@ lfs/                  SYSTEM=lfs: Linux From Scratch, one script per book sectio
   book/               the book's package list (wget-list-sysv) and checksums (md5sums)
   4-prepare/ ... 9-config/
                       chapters 4 to 11, in order
-  extra/              beyond the book: libxkbcommon and the pane display server
+  extra/              beyond the book: libxkbcommon, the pane display server, curl, git
   rootfs-overlay/     LakerLinux's own files, copied on top of the LFS system
 rootfs-overlay/       files copied onto the BusyBox root filesystem as-is
   etc/inittab         what init (PID 1) starts
@@ -671,13 +671,15 @@ systems needs it.
 ### Beyond the book: graphics
 
 After the book's chapters, the build runs the steps in `lfs/extra/`, which add
-what's needed to draw on the screen without X or Wayland's libraries:
+what's needed to draw on the screen without X or Wayland's libraries, and git:
 
 | Step | What it is |
 |---|---|
 | `01-xkeyboard-config.sh` | XKeyboard-Config, the database of keyboard layouts (from [BLFS](https://www.linuxfromscratch.org/blfs/view/12.4/x/xkeyboard-config.html)) |
 | `02-libxkbcommon.sh` | libxkbcommon, which turns key presses into characters using a layout (from [BLFS](https://www.linuxfromscratch.org/blfs/view/12.4/general/libxkbcommon.html)) |
 | `03-pane.sh` | [pane](https://github.com/irawoodring/desktop_environment), a Wayland display server written from scratch, styled with CSS |
+| `04-curl.sh` | cURL, for downloading over https (from [BLFS](https://www.linuxfromscratch.org/blfs/view/12.4/basicnet/curl.html)) |
+| `05-git.sh` | Git, which uses cURL to clone from GitHub and other servers (from [BLFS](https://www.linuxfromscratch.org/blfs/view/12.4/general/git.html)) |
 
 They're the same kind of script as the book's, and they run inside the new
 system like chapters 7 to 9. Their downloads are listed in `lfs/extra/sources`

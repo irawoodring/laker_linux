@@ -9,7 +9,7 @@
 #   lfs/7-chroot/           chapter 7: enter the new system, more tools
 #   lfs/8-system/           chapter 8: the final system, package by package
 #   lfs/9-config/           chapters 9-11: boot scripts, network, fstab, ...
-#   lfs/extra/              beyond the book: libxkbcommon and pane, for graphics
+#   lfs/extra/              beyond the book: libxkbcommon and pane (graphics), curl, git
 #
 #   scripts/lfs.sh                  # run every step that hasn't succeeded yet
 #   scripts/lfs.sh download         # just download and check the sources
