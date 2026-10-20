@@ -145,7 +145,7 @@ lfs/                  SYSTEM=lfs: Linux From Scratch, one script per book sectio
   book/               the book's package list (wget-list-sysv) and checksums (md5sums)
   4-prepare/ ... 9-config/
                       chapters 4 to 11, in order
-  extra/              beyond the book: libxkbcommon, the pane display server, curl, git
+  extra/              beyond the book: curl, git; with GUI=yes, libxkbcommon and pane
   rootfs-overlay/     LakerLinux's own files, copied on top of the LFS system
 rootfs-overlay/       files copied onto the BusyBox root filesystem as-is
   etc/inittab         what init (PID 1) starts
@@ -668,31 +668,39 @@ systems needs it.
 - **Nothing that needs a person at the keyboard**: `exec bash --login`,
   `tzselect`, `passwd` and the chapter 7 backup are replaced, with comments.
 
-### Beyond the book: graphics
+### Beyond the book: git, and optional graphics
 
-After the book's chapters, the build runs the steps in `lfs/extra/`, which add
-what's needed to draw on the screen without X or Wayland's libraries, and git:
+After the book's chapters, the build runs the steps in `lfs/extra/`. Two are
+always built:
+
+| Step | What it is |
+|---|---|
+| `04-curl.sh` | cURL, for downloading over https (from [BLFS](https://www.linuxfromscratch.org/blfs/view/12.4/basicnet/curl.html)) |
+| `05-git.sh` | Git, which uses cURL to clone from GitHub and other servers (from [BLFS](https://www.linuxfromscratch.org/blfs/view/12.4/general/git.html)) |
+
+The others add what's needed to draw on the screen without X or Wayland's
+libraries. They're built only with `GUI=yes`:
 
 | Step | What it is |
 |---|---|
 | `01-xkeyboard-config.sh` | XKeyboard-Config, the database of keyboard layouts (from [BLFS](https://www.linuxfromscratch.org/blfs/view/12.4/x/xkeyboard-config.html)) |
 | `02-libxkbcommon.sh` | libxkbcommon, which turns key presses into characters using a layout (from [BLFS](https://www.linuxfromscratch.org/blfs/view/12.4/general/libxkbcommon.html)) |
 | `03-pane.sh` | [pane](https://github.com/irawoodring/desktop_environment), a Wayland display server written from scratch, styled with CSS |
-| `04-curl.sh` | cURL, for downloading over https (from [BLFS](https://www.linuxfromscratch.org/blfs/view/12.4/basicnet/curl.html)) |
-| `05-git.sh` | Git, which uses cURL to clone from GitHub and other servers (from [BLFS](https://www.linuxfromscratch.org/blfs/view/12.4/general/git.html)) |
+
+```sh
+GUI=yes SYSTEM=lfs ./laker build    # or set GUI="${GUI:-yes}" in config/versions.sh
+./laker run --gui                   # log in on the window, not the serial console
+pane -s pane-demo                   # in LakerLinux; Ctrl+Alt+Backspace quits
+```
+
+Without `GUI=yes` those steps are left out, not marked done, so turning it on
+later builds just them. `./laker lfs status` shows them as `off`.
 
 They're the same kind of script as the book's, and they run inside the new
 system like chapters 7 to 9. Their downloads are listed in `lfs/extra/sources`
 with their checksums; pane is a git repository, pinned to one commit. To add a
-package of your own, add a step and a line there.
-
-To try pane, boot with a screen and log in on the window (not the serial
-console):
-
-```sh
-./laker run --gui
-pane -s pane-demo         # in LakerLinux; Ctrl+Alt+Backspace quits
-```
+package of your own, add a step and a line there; an `# Optional: GUI=yes` line
+makes a step graphics-only.
 
 An LFS system that was built before these steps existed gets them on the next
 `SYSTEM=lfs ./laker build`, which runs only the steps it hasn't done yet.

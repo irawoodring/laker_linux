@@ -9,8 +9,12 @@
 #   lfs/7-chroot/           chapter 7: enter the new system, more tools
 #   lfs/8-system/           chapter 8: the final system, package by package
 #   lfs/9-config/           chapters 9-11: boot scripts, network, fstab, ...
-#   lfs/extra/              beyond the book: libxkbcommon and pane (graphics), curl, git
+#   lfs/extra/              beyond the book: curl, git, and with GUI=yes,
+#                           libxkbcommon and pane (graphics)
 #
+# A step with an "# Optional: GUI=yes" line runs only when GUI=yes
+# (config/versions.sh); otherwise it's left out, and neither run nor marked
+# done, so turning GUI on later builds it then.
 #   scripts/lfs.sh                  # run every step that hasn't succeeded yet
 #   scripts/lfs.sh download         # just download and check the sources
 #   scripts/lfs.sh status           # list the steps, and which are done
@@ -65,11 +69,16 @@ download_sources() {
 # lfs/extra/'s packages, listed in lfs/extra/sources with their own checksums
 # (or, for a git repository, the exact commit).
 download_extra_sources() {
-    local kind url sum commit file tmp
+    local kind url sum commit file tmp wanted=" "
+    # Only the packages of steps that will run (see wanted_step).
+    for file in $(steps); do
+        wanted_step "$file" && wanted+="$(sed -n 's/^# Package: //p' "$STEPS_DIR/$file") "
+    done
     while read -r kind url sum file; do
         case "$kind" in ''|'#'*) continue ;; esac
         if [ "$kind" = git ]; then
             commit="$sum"
+            [[ "$wanted" == *" $file "* ]] || continue
             [ -f "$SOURCES/$file" ] && continue
             log "Downloading $file (${url##*/} at ${commit:0:12})"
             tmp="$(mktemp -d)"
@@ -83,6 +92,7 @@ download_extra_sources() {
         else
             # "URL MD5": the first two fields
             sum="$url" url="$kind" file="${kind##*/}"
+            [[ "$wanted" == *" $file "* ]] || continue
             [ -f "$SOURCES/$file" ] && continue
             log "Downloading $file"
             curl -fL --retry 3 -o "$SOURCES/$file.part" "$url"
@@ -97,6 +107,8 @@ download_extra_sources() {
 
 steps() { (cd "$STEPS_DIR" && ls -1 [4-9]-*/*.sh extra/*.sh); }
 stamp() { echo "$DONE_DIR/${1//\//_}"; }
+# False for an optional step (an "# Optional: GUI=yes" line) when GUI isn't yes.
+wanted_step() { ! grep -q '^# Optional: GUI=yes' "$STEPS_DIR/$1" || [ "$GUI" = yes ]; }
 
 # Chapters 4-6: in the build container, with the environment chapter 4.4
 # sets up for the lfs user (we're root in a throwaway container instead).
@@ -172,6 +184,7 @@ cmd_build() {
     download_sources
     local step
     for step in $(steps); do
+        wanted_step "$step" || continue
         [ -f "$(stamp "$step")" ] || run_step "$step"
     done
     log "Linux From Scratch is complete in $LFS"
@@ -180,7 +193,9 @@ cmd_build() {
 cmd_status() {
     local step
     for step in $(steps); do
-        if [ -f "$(stamp "$step")" ]; then echo "  done  $step"; else echo "        $step"; fi
+        if [ -f "$(stamp "$step")" ]; then echo "  done  $step"
+        elif wanted_step "$step"; then echo "        $step"
+        else echo "  off   $step (GUI=yes to build it)"; fi
     done
 }
 

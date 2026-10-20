@@ -72,7 +72,7 @@ in_env() {
     # e.g. `MEM=2G ./laker run` (see config/versions.sh and scripts/run.sh).
     local v
     opts+=(-e "SYSTEM=$SYSTEM")
-    for v in COMPILER JOBS MEM KERNEL_VERSION KERNEL_URL GLIBC_VERSION GLIBC_URL BUSYBOX_VERSION BUSYBOX_URL TCC_COMMIT TCC_URL LFS_MIRROR IMAGE_SIZE_MB; do
+    for v in COMPILER GUI JOBS MEM KERNEL_VERSION KERNEL_URL GLIBC_VERSION GLIBC_URL BUSYBOX_VERSION BUSYBOX_URL TCC_COMMIT TCC_URL LFS_MIRROR IMAGE_SIZE_MB; do
         if [ -n "${!v:-}" ]; then opts+=(-e "$v=${!v}"); fi
     done
     docker run "${opts[@]}" \

@@ -1,6 +1,7 @@
 # Extra: libxkbcommon-1.11.0 (from BLFS 12.4)
 # https://www.linuxfromscratch.org/blfs/view/12.4/general/libxkbcommon.html
 # Package: libxkbcommon-1.11.0.tar.gz
+# Optional: GUI=yes
 #
 # Turns key codes from the kernel into characters, using a layout from
 # xkeyboard-config. Every Wayland display server and app uses it.
