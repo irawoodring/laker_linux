@@ -74,5 +74,12 @@ CONFIG_STACKPROTECTOR_STRONG=y
 # CONFIG_UEVENT_HELPER is not set
 CONFIG_SYSFB_SIMPLEFB=y
 CONFIG_DRM_FBDEV_EMULATION=y
+
+# Graphics and input under `./laker run --gui`: QEMU's virtio-vga screen with a
+# real KMS driver (/dev/dri/card0), its virtio keyboard and tablet, and evdev
+# (/dev/input/event*), which is how programs read keyboards and mice.
+CONFIG_DRM_VIRTIO_GPU=y
+CONFIG_VIRTIO_INPUT=y
+CONFIG_INPUT_EVDEV=y
 CONFIG_X86_X2APIC=y
 CONFIG_PCI_MSI=y

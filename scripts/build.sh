@@ -509,6 +509,9 @@ stage_rootfs() {
         cp -a "$LAKER_DIR/lfs/rootfs-overlay/." "$ROOTFS/"
         # The installer is the same for both systems.
         install -m 755 "$LAKER_DIR/rootfs-overlay/usr/sbin/laker-install" "$ROOTFS/usr/sbin/"
+        # The certificate authorities https needs (curl, git), as for BusyBox below.
+        install -D -m 644 /etc/ssl/certs/ca-certificates.crt "$ROOTFS/etc/ssl/certs/ca-certificates.crt"
+        ln -sfn certs/ca-certificates.crt "$ROOTFS/etc/ssl/cert.pem"
         build_programs
         return 0
     fi

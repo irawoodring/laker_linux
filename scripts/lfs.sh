@@ -9,7 +9,12 @@
 #   lfs/7-chroot/           chapter 7: enter the new system, more tools
 #   lfs/8-system/           chapter 8: the final system, package by package
 #   lfs/9-config/           chapters 9-11: boot scripts, network, fstab, ...
+#   lfs/extra/              beyond the book: curl, git, and with GUI=yes,
+#                           libxkbcommon and pane (graphics)
 #
+# A step with an "# Optional: GUI=yes" line runs only when GUI=yes
+# (config/versions.sh); otherwise it's left out, and neither run nor marked
+# done, so turning GUI on later builds it then.
 #   scripts/lfs.sh                  # run every step that hasn't succeeded yet
 #   scripts/lfs.sh download         # just download and check the sources
 #   scripts/lfs.sh status           # list the steps, and which are done
@@ -58,12 +63,52 @@ download_sources() {
             die "some downloads don't match lfs/book/md5sums; delete them from $SOURCES and retry"
         touch "$SOURCES/.verified"
     fi
+    download_extra_sources
+}
+
+# lfs/extra/'s packages, listed in lfs/extra/sources with their own checksums
+# (or, for a git repository, the exact commit).
+download_extra_sources() {
+    local kind url sum commit file tmp wanted=" "
+    # Only the packages of steps that will run (see wanted_step).
+    for file in $(steps); do
+        wanted_step "$file" && wanted+="$(sed -n 's/^# Package: //p' "$STEPS_DIR/$file") "
+    done
+    while read -r kind url sum file; do
+        case "$kind" in ''|'#'*) continue ;; esac
+        if [ "$kind" = git ]; then
+            commit="$sum"
+            [[ "$wanted" == *" $file "* ]] || continue
+            [ -f "$SOURCES/$file" ] && continue
+            log "Downloading $file (${url##*/} at ${commit:0:12})"
+            tmp="$(mktemp -d)"
+            git -C "$tmp" init -q
+            # No password prompt: a public repository needs none, and GitHub
+            # asks for one when a repository is private or doesn't exist.
+            GIT_TERMINAL_PROMPT=0 git -C "$tmp" fetch -q --depth 1 "$url" "$commit" ||
+                die "can't fetch $commit from $url (is the repository public?)"
+            git -C "$tmp" archive --format=tar.gz --prefix="${file%.tar.gz}/" -o "$SOURCES/$file.part" FETCH_HEAD
+            rm -rf "$tmp"
+        else
+            # "URL MD5": the first two fields
+            sum="$url" url="$kind" file="${kind##*/}"
+            [[ "$wanted" == *" $file "* ]] || continue
+            [ -f "$SOURCES/$file" ] && continue
+            log "Downloading $file"
+            curl -fL --retry 3 -o "$SOURCES/$file.part" "$url"
+            echo "$sum  $file.part" | (cd "$SOURCES" && md5sum --quiet -c -) ||
+                die "$file doesn't match its md5sum in lfs/extra/sources"
+        fi
+        mv "$SOURCES/$file.part" "$SOURCES/$file"
+    done < "$STEPS_DIR/extra/sources"
 }
 
 # --- Running steps -------------------------------------------------------
 
-steps() { (cd "$STEPS_DIR" && ls -1 [4-9]-*/*.sh); }
+steps() { (cd "$STEPS_DIR" && ls -1 [4-9]-*/*.sh extra/*.sh); }
 stamp() { echo "$DONE_DIR/${1//\//_}"; }
+# False for an optional step (an "# Optional: GUI=yes" line) when GUI isn't yes.
+wanted_step() { ! grep -q '^# Optional: GUI=yes' "$STEPS_DIR/$1" || [ "$GUI" = yes ]; }
 
 # Chapters 4-6: in the build container, with the environment chapter 4.4
 # sets up for the lfs user (we're root in a throwaway container instead).
@@ -121,7 +166,7 @@ run_step() {
         touch "$(stamp "$step")"
         return 0
     fi
-    log "$step: $(sed -n '1s/^# LFS 12.4, //p' "$STEPS_DIR/$step")"
+    log "$step: $(sed -n '1s/^# \(LFS 12.4, \|Extra: \)//p' "$STEPS_DIR/$step")"
     local start=$SECONDS
     case "$step" in
         [4-6]-*) run_on_host "$step" ;;
@@ -139,6 +184,7 @@ cmd_build() {
     download_sources
     local step
     for step in $(steps); do
+        wanted_step "$step" || continue
         [ -f "$(stamp "$step")" ] || run_step "$step"
     done
     log "Linux From Scratch is complete in $LFS"
@@ -147,7 +193,9 @@ cmd_build() {
 cmd_status() {
     local step
     for step in $(steps); do
-        if [ -f "$(stamp "$step")" ]; then echo "  done  $step"; else echo "        $step"; fi
+        if [ -f "$(stamp "$step")" ]; then echo "  done  $step"
+        elif wanted_step "$step"; then echo "        $step"
+        else echo "  off   $step (GUI=yes to build it)"; fi
     done
 }
 

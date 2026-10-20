@@ -145,6 +145,7 @@ lfs/                  SYSTEM=lfs: Linux From Scratch, one script per book sectio
   book/               the book's package list (wget-list-sysv) and checksums (md5sums)
   4-prepare/ ... 9-config/
                       chapters 4 to 11, in order
+  extra/              beyond the book: curl, git; with GUI=yes, libxkbcommon and pane
   rootfs-overlay/     LakerLinux's own files, copied on top of the LFS system
 rootfs-overlay/       files copied onto the BusyBox root filesystem as-is
   etc/inittab         what init (PID 1) starts
@@ -667,6 +668,43 @@ systems needs it.
 - **Nothing that needs a person at the keyboard**: `exec bash --login`,
   `tzselect`, `passwd` and the chapter 7 backup are replaced, with comments.
 
+### Beyond the book: git, and optional graphics
+
+After the book's chapters, the build runs the steps in `lfs/extra/`. Two are
+always built:
+
+| Step | What it is |
+|---|---|
+| `04-curl.sh` | cURL, for downloading over https (from [BLFS](https://www.linuxfromscratch.org/blfs/view/12.4/basicnet/curl.html)) |
+| `05-git.sh` | Git, which uses cURL to clone from GitHub and other servers (from [BLFS](https://www.linuxfromscratch.org/blfs/view/12.4/general/git.html)) |
+
+The others add what's needed to draw on the screen without X or Wayland's
+libraries. They're built only with `GUI=yes`:
+
+| Step | What it is |
+|---|---|
+| `01-xkeyboard-config.sh` | XKeyboard-Config, the database of keyboard layouts (from [BLFS](https://www.linuxfromscratch.org/blfs/view/12.4/x/xkeyboard-config.html)) |
+| `02-libxkbcommon.sh` | libxkbcommon, which turns key presses into characters using a layout (from [BLFS](https://www.linuxfromscratch.org/blfs/view/12.4/general/libxkbcommon.html)) |
+| `03-pane.sh` | [pane](https://github.com/irawoodring/desktop_environment), a Wayland display server written from scratch, styled with CSS |
+
+```sh
+GUI=yes SYSTEM=lfs ./laker build    # or set GUI="${GUI:-yes}" in config/versions.sh
+./laker run --gui                   # log in on the window, not the serial console
+pane -s pane-demo                   # in LakerLinux; Ctrl+Alt+Backspace quits
+```
+
+Without `GUI=yes` those steps are left out, not marked done, so turning it on
+later builds just them. `./laker lfs status` shows them as `off`.
+
+They're the same kind of script as the book's, and they run inside the new
+system like chapters 7 to 9. Their downloads are listed in `lfs/extra/sources`
+with their checksums; pane is a git repository, pinned to one commit. To add a
+package of your own, add a step and a line there; an `# Optional: GUI=yes` line
+makes a step graphics-only.
+
+An LFS system that was built before these steps existed gets them on the next
+`SYSTEM=lfs ./laker build`, which runs only the steps it hasn't done yet.
+
 ### Changing an LFS package's build
 
 Edit its script in `lfs/`, then run it again:
@@ -1020,11 +1058,28 @@ booting through a bootloader:
 - 1 GB of RAM (set `MEM=2G` to change it) and 2 CPUs;
 - the disk image attached as a virtio disk, `/dev/vda` inside LakerLinux;
 - a virtio network card, `eth0`;
-- no graphical window: the serial console is your terminal.
+- no graphical window: the serial console is your terminal (`--gui` adds one,
+  below).
 
 On a Linux host where `/dev/kvm` is available, QEMU uses hardware
 virtualization and boots in a few seconds. Elsewhere (including macOS) it
 emulates the CPU, which is slower but works.
+
+**With a screen.** `./laker run --gui` opens a window instead: a virtual
+screen (`virtio-vga`, driven by a real KMS driver, so `/dev/dri/card0` exists),
+a keyboard, and a tablet-style mouse that follows your pointer with no mouse
+grab. Log in on the window or in the terminal, which still has the serial
+console (Ctrl-A then X still quits). This is the setup for graphics
+experiments: drawing to the framebuffer, DRM/KMS, reading `/dev/input/event*`.
+
+A window can't open from inside a Docker container, so `--gui` runs QEMU on
+your own computer. Install it first: `brew install qemu` on a Mac (the UEFI
+firmware comes with it), or `sudo apt install qemu-system-x86 ovmf` on
+Debian/Ubuntu. The window is Cocoa on macOS and GTK elsewhere; set
+`QEMU_DISPLAY` to choose another (`QEMU_DISPLAY=sdl`, or `vnc=:0` to connect
+with a VNC viewer). An Intel Mac gets hardware virtualization (`hvf`); on Apple
+Silicon the CPU is emulated. `--gui` combines with the other options, e.g.
+`./laker run --gui --direct`.
 
 **Networking.** QEMU's built-in "user mode" network gives LakerLinux a private
 network:
@@ -1191,8 +1246,21 @@ Ideas for student projects, roughly in order of difficulty:
   with `./laker shell` and the cross-compiler instead (see
   [Compiling from the build container](#compiling-from-the-build-container)),
   or give QEMU more memory with `MEM=2G ./laker run`.
+- **"Illegal instruction" inside LakerLinux, e.g. when compiling** (LFS
+  system). Older builds tuned GMP, which GCC uses, for the build machine's CPU,
+  and QEMU's emulated CPU lacks some of its instructions. Pull, then
+  `./laker lfs redo 8-system/20-gmp.sh` and `SYSTEM=lfs ./laker build rootfs image`.
 - **"No UEFI firmware (OVMF) found".** Install your distro's `ovmf` package, or
   use `./laker run --direct`.
+- **QEMU sits at "Booting from Hard Disk..."**, or says `-display gtk`/`sdl`
+  isn't accepted, when started by hand. LakerLinux boots from UEFI firmware, so
+  QEMU needs `-bios` pointing at OVMF, and only some QEMU builds have a GTK or
+  SDL window (macOS uses `cocoa`). `./laker run --gui` sets all of that up.
+- **`--gui` shows a console but nothing reacts to graphics or input
+  programs.** The kernel needs `CONFIG_DRM_VIRTIO_GPU`, `CONFIG_VIRTIO_INPUT`
+  and `CONFIG_INPUT_EVDEV` (in `config/kernel.fragment`); after pulling them,
+  run `./laker build kernel image`. Check with
+  `zcat /proc/config.gz | grep -E 'VIRTIO_GPU|VIRTIO_INPUT|EVDEV'`.
 - **My `menuconfig` changes disappeared.** The build regenerates `.config` every
   time. Put kernel options in `config/kernel.fragment` instead.
 - **My changes inside LakerLinux disappeared.** The image is rebuilt from

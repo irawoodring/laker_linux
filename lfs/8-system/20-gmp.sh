@@ -8,9 +8,15 @@
 
 sed -i '/long long t1;/,+1s/()/(...)/' configure
 
+# LakerLinux: the book notes that GMP is tuned for the CPU it's built on, and
+# that --host=none-linux-gnu builds a generic one instead. We need the generic
+# one: the image runs on other CPUs (QEMU's emulated one, other PCs) than the
+# build machine's, and GCC uses GMP, so a tuned GMP makes the compiler die
+# with "Illegal instruction" there.
 ./configure --prefix=/usr    \
             --enable-cxx     \
             --disable-static \
+            --host=none-linux-gnu \
             --docdir=/usr/share/doc/gmp-6.3.0
 
 make
