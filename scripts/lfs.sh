@@ -69,8 +69,9 @@ download_sources() {
 # lfs/extra/'s packages, listed in lfs/extra/sources with their own checksums
 # (or, for a git repository, the exact commit).
 download_extra_sources() {
-    local kind url sum commit file tmp wanted=" "
-    # Only the packages of steps that will run (see wanted_step).
+    local kind url sum commit file tmp wanted=" ${REDO_PACKAGE:-} "
+    # Only the packages of steps that will run (see wanted_step), and the one
+    # being redone.
     for file in $(steps); do
         wanted_step "$file" && wanted+="$(sed -n 's/^# Package: //p' "$STEPS_DIR/$file") "
     done
@@ -207,6 +208,9 @@ case "${1:-build}" in
     download) download_sources ;;
     status) cmd_status ;;
     redo)   [ $# -eq 2 ] || die "usage: scripts/lfs.sh redo <chapter>/<step>.sh"
+            [ -f "$STEPS_DIR/$2" ] || die "no step $2 (see ./laker lfs status)"
+            # Fetch its package if it's new (say, a version bump).
+            REDO_PACKAGE="$(sed -n 's/^# Package: //p' "$STEPS_DIR/$2")" download_sources
             mkdir -p "$DONE_DIR" "$LOG_DIR"; rm -f "$(stamp "$2")"; run_step "$2" ;;
     *)      die "usage: scripts/lfs.sh [build|download|status|redo <step>]" ;;
 esac
