@@ -74,8 +74,10 @@ download_extra_sources() {
             log "Downloading $file (${url##*/} at ${commit:0:12})"
             tmp="$(mktemp -d)"
             git -C "$tmp" init -q
-            git -C "$tmp" fetch -q --depth 1 "$url" "$commit" ||
-                die "can't fetch $commit from $url"
+            # No password prompt: a public repository needs none, and GitHub
+            # asks for one when a repository is private or doesn't exist.
+            GIT_TERMINAL_PROMPT=0 git -C "$tmp" fetch -q --depth 1 "$url" "$commit" ||
+                die "can't fetch $commit from $url (is the repository public?)"
             git -C "$tmp" archive --format=tar.gz --prefix="${file%.tar.gz}/" -o "$SOURCES/$file.part" FETCH_HEAD
             rm -rf "$tmp"
         else
