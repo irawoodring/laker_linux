@@ -1238,6 +1238,10 @@ Ideas for student projects, roughly in order of difficulty:
   with `./laker shell` and the cross-compiler instead (see
   [Compiling from the build container](#compiling-from-the-build-container)),
   or give QEMU more memory with `MEM=2G ./laker run`.
+- **"Illegal instruction" inside LakerLinux, e.g. when compiling** (LFS
+  system). Older builds tuned GMP, which GCC uses, for the build machine's CPU,
+  and QEMU's emulated CPU lacks some of its instructions. Pull, then
+  `./laker lfs redo 8-system/20-gmp.sh` and `SYSTEM=lfs ./laker build rootfs image`.
 - **"No UEFI firmware (OVMF) found".** Install your distro's `ovmf` package, or
   use `./laker run --direct`.
 - **QEMU sits at "Booting from Hard Disk..."**, or says `-display gtk`/`sdl`

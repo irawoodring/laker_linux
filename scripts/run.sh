@@ -83,6 +83,10 @@ if [ -w /dev/kvm ]; then
     args+=(-enable-kvm -cpu host)
 elif [ "$(uname -s)" = Darwin ] && [ "$(uname -m)" = x86_64 ]; then
     args+=(-accel hvf -cpu host)   # Intel Mac (only when run outside Docker: --gui)
+else
+    # Emulated: offer every instruction QEMU can emulate (SSE4, AVX2, ...),
+    # not its bare default CPU, so programs built for newer CPUs still run.
+    args+=(-cpu max)
 fi
 
 if [ "$direct" = 1 ]; then
