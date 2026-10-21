@@ -1,12 +1,32 @@
 # Sources for lfs/extra/: packages beyond the LFS book.
 #
-#   URL MD5                     a tarball, checked against its MD5 sum
+#   URL SUM [FILE]              a tarball, checked against its MD5 (from BLFS)
+#                               or SHA-512 sum; saved as FILE if given, else
+#                               as the URL's last part
 #   git URL COMMIT FILE         a git repository at COMMIT, packed into FILE
 #
-# Each step's "# Package:" line names the file it unpacks.
+# Each step's "# Package:" line names the file it unpacks. Only the packages
+# of steps that will run are downloaded (see GUI in config/versions.sh).
 
-https://www.x.org/pub/individual/data/xkeyboard-config/xkeyboard-config-2.45.tar.xz cebc84ec99d3273e07aee8ecff3e3519
-https://github.com/lfs-book/libxkbcommon/archive/v1.11.0/libxkbcommon-1.11.0.tar.gz 28be5e49d8aa19e20fd7acd4b24e19be
-git https://github.com/irawoodring/desktop_environment 175bd91e31718d055ba1bb9ee10a74660fae2940 pane-175bd91e3171.tar.gz
+# Always built
 https://curl.se/download/curl-8.15.0.tar.xz b8872bb6cc5d18d03bea8ff5090b2b81
 https://www.kernel.org/pub/software/scm/git/git-2.50.1.tar.xz 2cb96fae126d66f8ff23a68f8dd5d748
+
+# GUI=yes: keyboard handling
+https://www.x.org/pub/individual/data/xkeyboard-config/xkeyboard-config-2.45.tar.xz cebc84ec99d3273e07aee8ecff3e3519
+https://github.com/lfs-book/libxkbcommon/archive/v1.11.0/libxkbcommon-1.11.0.tar.gz 28be5e49d8aa19e20fd7acd4b24e19be
+
+# GUI=yes: the foot terminal and what it needs (MD5s from BLFS 12.4;
+# SHA-512s for tllist, fcft, foot and DejaVu from Gentoo's package manifests)
+https://gitlab.freedesktop.org/wayland/wayland/-/releases/1.24.0/downloads/wayland-1.24.0.tar.xz fda0b2a73ea2716f61d75767e02008e1
+https://gitlab.freedesktop.org/wayland/wayland-protocols/-/releases/1.45/downloads/wayland-protocols-1.45.tar.xz a235baeab3f1c6d57ac4c7c00ecd7e48
+https://www.cairographics.org/releases/pixman-0.46.4.tar.gz c08173c8e1d2cc79428d931c13ffda59
+https://downloads.sourceforge.net/freetype/freetype-2.13.3.tar.xz f3b4432c4212064c00500e1ad63fbc64
+https://gitlab.freedesktop.org/api/v4/projects/890/packages/generic/fontconfig/2.17.1/fontconfig-2.17.1.tar.xz f68f95052c7297b98eccb7709d817f6a
+https://downloads.sourceforge.net/dejavu/dejavu-fonts-ttf-2.37.tar.bz2 bafa39321021097432777f0825d700190c23f917d754a4504722cd8946716c22c083836294dab7f3ae7cf20af63c4d0944f3423bf4aa25dbca562d1f30e00654
+https://codeberg.org/dnkl/tllist/archive/1.1.0.tar.gz 9aade353a3ce4edf5ddc4ef85c1926343d9f88c9c8ee3994f0df89eefeb3b3e0ab168cf0c9a2ca4a858215c2a328462d4b5bf182134b5deb3b3a0e15af4006fe tllist-1.1.0.tar.gz
+https://codeberg.org/dnkl/fcft/releases/download/3.3.3/fcft-3.3.3.tar.gz b1d0264d490ba95872301a949e8a79da947f77e3196c8299bfddb01e9931cce4100ebcd53930e73c9fa830cc3b52f04ff555777fc17d7bbdd0445a2c924d8c20
+https://codeberg.org/dnkl/foot/releases/download/1.27.0/foot-1.27.0.tar.gz fb8845b84bd25d65043bf3452e7eb4f17561465713251b06259dff02dec9e8ca177c3efaeaf64533b4922738da06277ae08fa1790f25e25f28f89ab8fabf7873
+
+# GUI=yes: the pane display server, last so it finds FreeType and the fonts
+git https://github.com/irawoodring/desktop_environment 65b1aab7a546d6eaa141e5bfeb2b384343fcfa04 pane-65b1aab7a546.tar.gz

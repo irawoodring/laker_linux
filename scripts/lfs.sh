@@ -10,7 +10,7 @@
 #   lfs/8-system/           chapter 8: the final system, package by package
 #   lfs/9-config/           chapters 9-11: boot scripts, network, fstab, ...
 #   lfs/extra/              beyond the book: curl, git, and with GUI=yes,
-#                           libxkbcommon and pane (graphics)
+#                           the pane display server and foot terminal
 #
 # A step with an "# Optional: GUI=yes" line runs only when GUI=yes
 # (config/versions.sh); otherwise it's left out, and neither run nor marked
@@ -69,8 +69,9 @@ download_sources() {
 # lfs/extra/'s packages, listed in lfs/extra/sources with their own checksums
 # (or, for a git repository, the exact commit).
 download_extra_sources() {
-    local kind url sum commit file tmp wanted=" "
-    # Only the packages of steps that will run (see wanted_step).
+    local kind url sum commit file tmp wanted=" ${REDO_PACKAGE:-} "
+    # Only the packages of steps that will run (see wanted_step), and the one
+    # being redone.
     for file in $(steps); do
         wanted_step "$file" && wanted+="$(sed -n 's/^# Package: //p' "$STEPS_DIR/$file") "
     done
@@ -90,14 +91,17 @@ download_extra_sources() {
             git -C "$tmp" archive --format=tar.gz --prefix="${file%.tar.gz}/" -o "$SOURCES/$file.part" FETCH_HEAD
             rm -rf "$tmp"
         else
-            # "URL MD5": the first two fields
-            sum="$url" url="$kind" file="${kind##*/}"
+            # "URL SUM [FILE]": FILE defaults to the URL's last part
+            file="${sum:-${kind##*/}}" sum="$url" url="$kind"
             [[ "$wanted" == *" $file "* ]] || continue
             [ -f "$SOURCES/$file" ] && continue
             log "Downloading $file"
             curl -fL --retry 3 -o "$SOURCES/$file.part" "$url"
-            echo "$sum  $file.part" | (cd "$SOURCES" && md5sum --quiet -c -) ||
-                die "$file doesn't match its md5sum in lfs/extra/sources"
+            # MD5 (32 hex digits, as BLFS gives) or SHA-512 (128)
+            local check=md5sum
+            [ "${#sum}" = 128 ] && check=sha512sum
+            echo "$sum  $file.part" | (cd "$SOURCES" && "$check" --quiet -c -) ||
+                die "$file doesn't match its checksum in lfs/extra/sources"
         fi
         mv "$SOURCES/$file.part" "$SOURCES/$file"
     done < "$STEPS_DIR/extra/sources"
@@ -204,6 +208,9 @@ case "${1:-build}" in
     download) download_sources ;;
     status) cmd_status ;;
     redo)   [ $# -eq 2 ] || die "usage: scripts/lfs.sh redo <chapter>/<step>.sh"
+            [ -f "$STEPS_DIR/$2" ] || die "no step $2 (see ./laker lfs status)"
+            # Fetch its package if it's new (say, a version bump).
+            REDO_PACKAGE="$(sed -n 's/^# Package: //p' "$STEPS_DIR/$2")" download_sources
             mkdir -p "$DONE_DIR" "$LOG_DIR"; rm -f "$(stamp "$2")"; run_step "$2" ;;
     *)      die "usage: scripts/lfs.sh [build|download|status|redo <step>]" ;;
 esac

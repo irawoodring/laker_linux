@@ -14,8 +14,9 @@ SYSTEM="${SYSTEM:-busybox}"
 # Override it for one build with e.g. COMPILER=tcc ./laker build
 COMPILER="${COMPILER:-gcc}"
 
-# Whether the lfs system also gets graphics: libxkbcommon and the pane display
-# server (lfs/extra/; see "Beyond the book" in README.md). Off by default.
+# Whether the lfs system also gets graphics: the pane display server and the
+# foot terminal, with the libraries and fonts they need (lfs/extra/; see
+# "Beyond the book" in README.md). Off by default.
 #   no   leave them out
 #   yes  build them too; then ./laker run --gui to try pane
 # Override it for one build with e.g. GUI=yes SYSTEM=lfs ./laker build

@@ -145,7 +145,7 @@ lfs/                  SYSTEM=lfs: Linux From Scratch, one script per book sectio
   book/               the book's package list (wget-list-sysv) and checksums (md5sums)
   4-prepare/ ... 9-config/
                       chapters 4 to 11, in order
-  extra/              beyond the book: curl, git; with GUI=yes, libxkbcommon and pane
+  extra/              beyond the book: curl, git; with GUI=yes, pane and foot
   rootfs-overlay/     LakerLinux's own files, copied on top of the LFS system
 rootfs-overlay/       files copied onto the BusyBox root filesystem as-is
   etc/inittab         what init (PID 1) starts
@@ -678,27 +678,39 @@ always built:
 | `04-curl.sh` | cURL, for downloading over https (from [BLFS](https://www.linuxfromscratch.org/blfs/view/12.4/basicnet/curl.html)) |
 | `05-git.sh` | Git, which uses cURL to clone from GitHub and other servers (from [BLFS](https://www.linuxfromscratch.org/blfs/view/12.4/general/git.html)) |
 
-The others add what's needed to draw on the screen without X or Wayland's
-libraries. They're built only with `GUI=yes`:
+The others add a graphical desktop without X: the pane display server and the
+foot terminal, with what they need. They're built only with `GUI=yes`:
 
 | Step | What it is |
 |---|---|
 | `01-xkeyboard-config.sh` | XKeyboard-Config, the database of keyboard layouts (from [BLFS](https://www.linuxfromscratch.org/blfs/view/12.4/x/xkeyboard-config.html)) |
 | `02-libxkbcommon.sh` | libxkbcommon, which turns key presses into characters using a layout (from [BLFS](https://www.linuxfromscratch.org/blfs/view/12.4/general/libxkbcommon.html)) |
-| `03-pane.sh` | [pane](https://github.com/irawoodring/desktop_environment), a Wayland display server written from scratch, styled with CSS |
+| `06-wayland.sh`, `07-wayland-protocols.sh` | The library Wayland apps use to talk to a display server, and the protocol definitions (from BLFS) |
+| `08-pixman.sh` | Fast pixel operations (from BLFS) |
+| `09-freetype.sh`, `10-fontconfig.sh` | Font rendering, and finding fonts by name (from BLFS) |
+| `11-dejavu-fonts.sh` | The DejaVu fonts: Sans, Serif, Sans Mono |
+| `12-tllist.sh`, `13-fcft.sh` | Libraries [foot](https://codeberg.org/dnkl/foot) uses for lists and fonts (not in BLFS) |
+| `14-foot.sh` | [foot](https://codeberg.org/dnkl/foot), a fast, lightweight Wayland terminal (not in BLFS) |
+| `15-pane.sh` | [pane](https://github.com/irawoodring/desktop_environment), a Wayland display server written from scratch, styled with CSS. Last, so it draws with FreeType and DejaVu |
 
 ```sh
 GUI=yes SYSTEM=lfs ./laker build    # or set GUI="${GUI:-yes}" in config/versions.sh
 ./laker run --gui                   # log in on the window, not the serial console
-pane -s pane-demo                   # in LakerLinux; Ctrl+Alt+Backspace quits
+pane                                # in LakerLinux; Ctrl+Alt+Backspace quits
 ```
+
+In pane, Super+Enter or Ctrl+Alt+T opens a foot terminal (on a Mac keyboard,
+Cmd is Super, but QEMU keeps some Cmd shortcuts, so use Ctrl+Option+T).
+`pane -s pane-demo` also starts the demo client.
 
 Without `GUI=yes` those steps are left out, not marked done, so turning it on
 later builds just them. `./laker lfs status` shows them as `off`.
 
 They're the same kind of script as the book's, and they run inside the new
 system like chapters 7 to 9. Their downloads are listed in `lfs/extra/sources`
-with their checksums; pane is a git repository, pinned to one commit. To add a
+with their checksums: MD5s from BLFS, and SHA-512s from Gentoo's package
+manifests for those BLFS doesn't have. pane is a git repository, pinned to one
+commit. To add a
 package of your own, add a step and a line there; an `# Optional: GUI=yes` line
 makes a step graphics-only.
 
