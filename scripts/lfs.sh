@@ -111,6 +111,15 @@ download_extra_sources() {
 
 steps() { (cd "$STEPS_DIR" && ls -1 [4-9]-*/*.sh extra/*.sh); }
 stamp() { echo "$DONE_DIR/${1//\//_}"; }
+package_of() { sed -n 's/^# Package: //p' "$STEPS_DIR/$1"; }
+# A step is done if it succeeded with the package it names now. Its mark holds
+# that package, so a version bump (say, a new pane commit) builds it again.
+# (Marks from before this was recorded are empty, and still count as done.)
+step_done() {
+    local mark; mark="$(stamp "$1")"
+    [ -f "$mark" ] && { [ ! -s "$mark" ] || [ "$(cat "$mark")" = "$(package_of "$1")" ]; }
+}
+mark_done() { package_of "$1" > "$(stamp "$1")"; }
 # False for an optional step (an "# Optional: GUI=yes" line) when GUI isn't yes.
 wanted_step() { ! grep -q '^# Optional: GUI=yes' "$STEPS_DIR/$1" || [ "$GUI" = yes ]; }
 
@@ -167,7 +176,7 @@ run_step() {
     local step="$1" log="$LOG_DIR/${1//\//_}.log"
     if grep -q '^# Skip:' "$STEPS_DIR/$step"; then
         echo "    skipping $step ($(sed -n 's/^# Skip: //p' "$STEPS_DIR/$step"))"
-        touch "$(stamp "$step")"
+        mark_done "$step"
         return 0
     fi
     log "$step: $(sed -n '1s/^# \(LFS 12.4, \|Extra: \)//p' "$STEPS_DIR/$step")"
@@ -180,7 +189,7 @@ run_step() {
         die "$step failed; the full log is $log. Fix the problem, then run ./laker build lfs again."
     }
     echo "    done in $(( (SECONDS - start) / 60 ))m$(( (SECONDS - start) % 60 ))s"
-    touch "$(stamp "$step")"
+    mark_done "$step"
 }
 
 cmd_build() {
@@ -189,7 +198,10 @@ cmd_build() {
     local step
     for step in $(steps); do
         wanted_step "$step" || continue
-        [ -f "$(stamp "$step")" ] || run_step "$step"
+        step_done "$step" && continue
+        [ -f "$(stamp "$step")" ] &&
+            echo "    $step: its package is now $(package_of "$step"), building it again"
+        run_step "$step"
     done
     log "Linux From Scratch is complete in $LFS"
 }
@@ -197,7 +209,8 @@ cmd_build() {
 cmd_status() {
     local step
     for step in $(steps); do
-        if [ -f "$(stamp "$step")" ]; then echo "  done  $step"
+        if step_done "$step"; then echo "  done  $step"
+        elif [ -f "$(stamp "$step")" ]; then echo "  new   $step (its package changed: builds again)"
         elif wanted_step "$step"; then echo "        $step"
         else echo "  off   $step (GUI=yes to build it)"; fi
     done

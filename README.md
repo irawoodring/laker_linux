@@ -727,7 +727,8 @@ vim lfs/8-system/72-vim.sh
 SYSTEM=lfs ./laker build rootfs image
 ```
 
-Later packages that depend on it aren't rebuilt automatically. Redo those too,
+A step whose `# Package:` line changes (a version bump) is built again by the next
+`./laker build`; `./laker lfs status` marks it `new`. Later packages that depend on it aren't rebuilt automatically. Redo those too,
 or delete `lfs-done/` in the build directory to rebuild everything.
 
 ### Changing an LFS package's source
