@@ -55,7 +55,8 @@ Scratch system). Nothing else. Then pick one of these:
 | BusyBox system with GCC (the default) | `./laker build` | About an hour, mostly GCC |
 | BusyBox system with TCC, the Tiny C Compiler | `COMPILER=tcc ./laker build` | About 20 minutes, mostly the kernel and glibc |
 | BusyBox system with both compilers | `COMPILER=both ./laker build` | About an hour |
-| Full Linux From Scratch system | `SYSTEM=lfs ./laker build` | Several hours |
+| Full Linux From Scratch system | `./laker build --lfs` | Several hours |
+| Linux From Scratch with a graphical desktop (pane and foot) | `./laker build --gui` | Several hours, plus about an hour |
 
 and boot it:
 
@@ -96,9 +97,9 @@ in Docker.
 there, or for one build on the command line:
 
 ```sh
-./laker build                    # SYSTEM=busybox, the default
-SYSTEM=lfs ./laker build
-SYSTEM=lfs ./laker run
+./laker build                    # the BusyBox system, the default
+./laker build --lfs              # or: SYSTEM=lfs ./laker build
+./laker run
 ```
 
 | | `busybox` (default) | `lfs` |
@@ -145,7 +146,7 @@ lfs/                  SYSTEM=lfs: Linux From Scratch, one script per book sectio
   book/               the book's package list (wget-list-sysv) and checksums (md5sums)
   4-prepare/ ... 9-config/
                       chapters 4 to 11, in order
-  extra/              beyond the book: curl, git; with GUI=yes, pane and foot
+  extra/              beyond the book: curl, git; with --gui, pane and foot
   rootfs-overlay/     LakerLinux's own files, copied on top of the LFS system
 rootfs-overlay/       files copied onto the BusyBox root filesystem as-is
   etc/inittab         what init (PID 1) starts
@@ -578,14 +579,14 @@ binutils, make), bash, coreutils, util-linux, Perl, Python, vim, man pages,
 SysVinit with the LFS boot scripts, and about 75 other packages.
 
 ```sh
-SYSTEM=lfs ./laker build        # several hours; resumes where it left off if stopped
-SYSTEM=lfs ./laker run          # log in as root, no password
+./laker build --lfs             # several hours; resumes where it left off if stopped
+./laker run                     # log in as root, no password
 ./laker lfs status              # in another terminal: which steps are done
 ```
 
 The build records each step as it finishes. If it stops (an error, a closed
 laptop, Ctrl-C), run it again and it carries on from that step. On a Mac,
-`caffeinate -i SYSTEM=lfs ./laker build` keeps the Mac awake meanwhile.
+`caffeinate -i ./laker build --lfs` keeps the Mac awake meanwhile.
 
 ### Linux From Scratch, automated
 
@@ -643,7 +644,7 @@ systems needs it.
 | `./laker lfs status` | Lists every step, marking the finished ones |
 | `./laker lfs redo 8-system/35-bash.sh` | Runs one step again |
 | `./laker lfs download` | Downloads and checks the sources only |
-| `SYSTEM=lfs ./laker build lfs` | Runs every unfinished step (part of `./laker build`) |
+| `./laker build --lfs lfs` | Runs every unfinished step (part of `./laker build`) |
 
 #### Where LakerLinux differs from the book
 
@@ -679,7 +680,7 @@ always built:
 | `05-git.sh` | Git, which uses cURL to clone from GitHub and other servers (from [BLFS](https://www.linuxfromscratch.org/blfs/view/12.4/general/git.html)) |
 
 The others add a graphical desktop without X: the pane display server and the
-foot terminal, with what they need. They're built only with `GUI=yes`:
+foot terminal, with what they need. They're built only when you ask, with `--gui`:
 
 | Step | What it is |
 |---|---|
@@ -694,7 +695,7 @@ foot terminal, with what they need. They're built only with `GUI=yes`:
 | `15-pane.sh` | [pane](https://github.com/irawoodring/desktop_environment), a Wayland display server written from scratch, styled with CSS. Last, so it draws with FreeType and DejaVu |
 
 ```sh
-GUI=yes SYSTEM=lfs ./laker build    # or set GUI="${GUI:-yes}" in config/versions.sh
+./laker build --gui                 # the LFS system plus the desktop
 ./laker run --gui                   # log in on the window, not the serial console
 pane                                # in LakerLinux; Ctrl+Alt+Backspace quits
 ```
@@ -703,8 +704,9 @@ In pane, Super+Enter or Ctrl+Alt+T opens a foot terminal (on a Mac keyboard,
 Cmd is Super, but QEMU keeps some Cmd shortcuts, so use Ctrl+Option+T).
 `pane -s pane-demo` also starts the demo client.
 
-Without `GUI=yes` those steps are left out, not marked done, so turning it on
-later builds just them. `./laker lfs status` shows them as `off`.
+Without `--gui` those steps are left out, not marked done, so building with `--gui`
+later builds just them. (A desktop built earlier stays in the system until
+`./laker clean`.) `./laker lfs status` shows them as `off`.
 
 They're the same kind of script as the book's, and they run inside the new
 system like chapters 7 to 9. Their downloads are listed in `lfs/extra/sources`
@@ -712,10 +714,10 @@ with their checksums: MD5s from BLFS, and SHA-512s from Gentoo's package
 manifests for those BLFS doesn't have. pane is a git repository, pinned to one
 commit. To add a
 package of your own, add a step and a line there; an `# Optional: GUI=yes` line
-makes a step graphics-only.
+makes a step part of the `--gui` desktop.
 
 An LFS system that was built before these steps existed gets them on the next
-`SYSTEM=lfs ./laker build`, which runs only the steps it hasn't done yet.
+`./laker build --lfs` (or `--gui`), which runs only the steps it hasn't done yet.
 
 ### Changing an LFS package's build
 
@@ -724,7 +726,7 @@ Edit its script in `lfs/`, then run it again:
 ```sh
 vim lfs/8-system/72-vim.sh
 ./laker lfs redo 8-system/72-vim.sh
-SYSTEM=lfs ./laker build rootfs image
+./laker build --lfs rootfs image
 ```
 
 A step whose `# Package:` line changes (a version bump) is built again by the next
@@ -1262,7 +1264,7 @@ Ideas for student projects, roughly in order of difficulty:
 - **"Illegal instruction" inside LakerLinux, e.g. when compiling** (LFS
   system). Older builds tuned GMP, which GCC uses, for the build machine's CPU,
   and QEMU's emulated CPU lacks some of its instructions. Pull, then
-  `./laker lfs redo 8-system/20-gmp.sh` and `SYSTEM=lfs ./laker build rootfs image`.
+  `./laker lfs redo 8-system/20-gmp.sh` and `./laker build --lfs rootfs image`.
 - **"No UEFI firmware (OVMF) found".** Install your distro's `ovmf` package, or
   use `./laker run --direct`.
 - **QEMU sits at "Booting from Hard Disk..."**, or says `-display gtk`/`sdl`
@@ -1305,12 +1307,12 @@ Ideas for student projects, roughly in order of difficulty:
   `configure` runs again.
 - **An LFS step failed.** The error shows the end of the step's log; the full
   log is in `/build/lfs-logs/` (`SYSTEM=lfs ./laker shell`). Fix the cause, then
-  run `SYSTEM=lfs ./laker build` again: it starts from the failed step.
+  run `./laker build --lfs` again: it starts from the failed step.
 - **"some downloads don't match lfs/book/md5sums".** A download was cut off or
   the mirror changed a file. Delete it from `/build/lfs-sources/` and build
   again. To use a different mirror, set `LFS_MIRROR`.
 - **"... still has file systems mounted from the lfs stage".** An LFS build was
-  killed in chapter 7 or later. Run `SYSTEM=lfs ./laker build lfs` (it unmounts
+  killed in chapter 7 or later. Run `./laker build --lfs lfs` (it unmounts
   when it finishes), or restart Docker.
 - **The LFS build is very slow on a Mac.** Its container runs as x86_64,
   emulated on Apple Silicon. Turn on Rosetta in Docker Desktop's settings, and
