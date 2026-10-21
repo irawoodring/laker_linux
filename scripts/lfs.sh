@@ -212,7 +212,7 @@ cmd_status() {
         if step_done "$step"; then echo "  done  $step"
         elif [ -f "$(stamp "$step")" ]; then echo "  new   $step (its package changed: builds again)"
         elif wanted_step "$step"; then echo "        $step"
-        else echo "  off   $step (GUI=yes to build it)"; fi
+        else echo "  off   $step (./laker build --gui builds it)"; fi
     done
 }
 

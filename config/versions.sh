@@ -3,7 +3,7 @@
 #            about 20 minutes to an hour
 #   lfs      a complete GNU/Linux system built by following Linux From
 #            Scratch 12.4, about 80 packages; several hours
-# Override it for one build with e.g. SYSTEM=lfs ./laker build
+# Override it for one build with ./laker build --lfs (or SYSTEM=lfs ./laker build)
 SYSTEM="${SYSTEM:-busybox}"
 
 # Which C compiler the busybox system ships (see "Choosing a compiler" in
@@ -19,7 +19,7 @@ COMPILER="${COMPILER:-gcc}"
 # "Beyond the book" in README.md). Off by default.
 #   no   leave them out
 #   yes  build them too; then ./laker run --gui to try pane
-# Override it for one build with e.g. GUI=yes SYSTEM=lfs ./laker build
+# Override it for one build with ./laker build --gui (or GUI=yes)
 GUI="${GUI:-no}"
 
 # Pinned upstream versions. Bump these to upgrade; the build re-downloads

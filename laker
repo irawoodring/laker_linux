@@ -2,13 +2,18 @@
 #
 # LakerLinux front door.
 #
-#   ./laker build [stage...]   build kernel + userland + disk image (inside Docker)
+#   ./laker build [--lfs | --busybox] [--gui] [stage...]
+#                              build kernel + userland + disk image (inside Docker)
+#                              --lfs / --busybox: which system (see below)
+#                              --gui: the LFS system plus a graphical desktop:
+#                              the pane display server and the foot terminal
 #   ./laker run [--direct] [--usb | --boot-usb] [--gui]
 #                              boot out/lakerlinux.img in QEMU (--usb: with a
 #                              virtual USB stick to install to; --gui: in a
 #                              window, using your own QEMU; see README.md)
-#   ./laker lfs status|download|redo <step>
-#                              Linux From Scratch steps (SYSTEM=lfs)
+#   ./laker lfs status|download|redo <step> [--gui]
+#                              Linux From Scratch steps (--gui: count the
+#                              desktop's steps too)
 #   ./laker shell              a shell inside the build container
 #   ./laker diff [<component> [name]]
 #                              show your source edits, or save them as a patch
@@ -18,10 +23,12 @@
 # Components: kernel, glibc, busybox, binutils, gcc, tcc, make, util-linux,
 # e2fsprogs.
 #
-# Choose the system with SYSTEM=busybox (default) or lfs, and the busybox
-# system's compiler with COMPILER=gcc (default), tcc or both, e.g.
+# The system is BusyBox unless you say --lfs (or set SYSTEM=lfs). The desktop
+# is only built when you say --gui (or set GUI=yes). The busybox system's
+# compiler: COMPILER=gcc (default), tcc or both, e.g.
 #   COMPILER=tcc ./laker build
-#   SYSTEM=lfs ./laker build
+#   ./laker build --lfs
+#   ./laker build --gui
 #
 # Set LAKER_NATIVE=1 to skip Docker and use your own Linux toolchain
 # (see README.md for the package list).
@@ -29,10 +36,35 @@
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
-# SYSTEM: from the command line, else its default in config/versions.sh.
-# (Everything else in that file is read inside the container.)
+cmd="${1:-help}"; shift || true
+
+# Flags that stand for settings: --lfs / --busybox for SYSTEM, --gui for GUI.
+# (run has its own --gui, for a window, so it's left alone.) Everything else
+# goes through to the script. "${a[@]+...}": macOS's bash 3.2 calls an empty
+# array unbound under `set -u`.
+args=()
+want_busybox=0
+for a in "$@"; do
+    case "$cmd:$a" in
+        build:--lfs)     SYSTEM=lfs ;;
+        build:--busybox) SYSTEM=busybox; want_busybox=1 ;;
+        build:--gui|lfs:--gui) GUI=yes ;;
+        *) args+=("$a") ;;
+    esac
+done
+set -- ${args[@]+"${args[@]}"}
+if [ "${GUI:-}" = yes ] && [ "$cmd" = build ]; then
+    # the desktop is part of the LFS system
+    [ "$want_busybox" = 0 ] || { echo "--gui builds the LFS system; it can't go with --busybox." >&2; exit 1; }
+    SYSTEM=lfs
+fi
+
+# SYSTEM: from the flags or the command line, else its default in
+# config/versions.sh. (Everything else in that file is read inside the container.)
 SYSTEM="${SYSTEM:-$(sed -n 's/^SYSTEM="${SYSTEM:-\(.*\)}"$/\1/p' config/versions.sh)}"
-if [ "${1:-}" = lfs ]; then SYSTEM=lfs; fi   # ./laker lfs ... is always about LFS
+if [ "$cmd" = lfs ]; then SYSTEM=lfs; fi   # ./laker lfs ... is always about LFS
+export SYSTEM   # for LAKER_NATIVE=1 builds, which run the scripts directly
+[ -z "${GUI:-}" ] || export GUI
 
 # Each system has its own Docker image and build volume. The build lives in a
 # volume: faster than your own disk, and macOS's case-insensitive filesystem
@@ -81,7 +113,6 @@ in_env() {
         "$IMAGE" "$@"
 }
 
-cmd="${1:-help}"; shift || true
 case "$cmd" in
     build) in_env scripts/build.sh "$@" ;;
     run)
@@ -100,5 +131,5 @@ case "$cmd" in
     clean)
         rm -rf out
         in_env bash -c 'b="${BUILD_DIR:-build}"; rm -rf "$b/src" "$b/rootfs" "$b"/*.img "$b/kernel.fragment" "$b/sysroot" "$b/kernel-headers" "$b"/glibc-build-* "$b"/cross* "$b"/devtools* "$b/tcc-build" "$b"/make-build-* "$b"/util-linux-build-* "$b"/e2fsprogs-build-* "$b/initramfs" "$b/lfs" "$b/lfs-done" "$b/lfs-logs" "$b"/zlib-build "$b"/openssl-build "$b"/curl-build "$b"/git-build"';;
-    *) sed -n '3,27p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
+    *) sed -n '3,33p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
 esac
