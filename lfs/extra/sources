@@ -29,4 +29,4 @@ https://codeberg.org/dnkl/fcft/releases/download/3.3.3/fcft-3.3.3.tar.gz b1d0264
 https://codeberg.org/dnkl/foot/releases/download/1.27.0/foot-1.27.0.tar.gz fb8845b84bd25d65043bf3452e7eb4f17561465713251b06259dff02dec9e8ca177c3efaeaf64533b4922738da06277ae08fa1790f25e25f28f89ab8fabf7873
 
 # GUI=yes: the pane display server, last so it finds FreeType and the fonts
-git https://github.com/irawoodring/desktop_environment 65b1aab7a546d6eaa141e5bfeb2b384343fcfa04 pane-65b1aab7a546.tar.gz
+git https://github.com/irawoodring/desktop_environment e718a122d7de12eacdc072b5c214daa501e9cded pane-e718a122d7de.tar.gz

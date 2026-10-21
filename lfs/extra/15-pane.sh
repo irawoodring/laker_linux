@@ -1,6 +1,6 @@
 # Extra: pane, a Wayland display server written from scratch
 # https://github.com/irawoodring/desktop_environment
-# Package: pane-65b1aab7a546.tar.gz
+# Package: pane-e718a122d7de.tar.gz
 # Optional: GUI=yes
 #
 # Draws straight to the screen through DRM/KMS (/dev/dri/card0), reads the
